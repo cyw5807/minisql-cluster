@@ -1,0 +1,24 @@
+﻿# Maven 编译输出
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+
+# VS Code 专属配置
+.vscode/
+
+# VS Code Java 扩展 (Eclipse 底层) 生成文件
+.classpath
+.project
+.settings/
+.factorypath
+
+# IntelliJ IDEA (保留此项以防你的组员使用 IDEA)
+.idea/
+*.iml
+*.iws
+
+# 系统与日志文件
+.DS_Store
+Thumbs.db
+*.log
