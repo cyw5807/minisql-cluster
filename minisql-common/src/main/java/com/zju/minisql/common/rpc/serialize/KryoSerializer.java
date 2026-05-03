@@ -14,13 +14,17 @@ public class KryoSerializer implements Serializer {
     // 使用 ThreadLocal 解决 Kryo 的线程安全问题
     private static final ThreadLocal<Kryo> KRYO_THREAD_LOCAL = ThreadLocal.withInitial(() -> {
         Kryo kryo = new Kryo();
-        // 注册常用类，提升序列化效率并减小体积
         kryo.register(RpcRequest.class);
         kryo.register(RpcResponse.class);
         kryo.register(Object[].class);
         kryo.register(Class[].class);
+        
+        // 对元数据类的序列化支持
+        kryo.register(com.zju.minisql.common.meta.ColumnMeta.class);
+        kryo.register(com.zju.minisql.common.meta.TableMeta.class);
+        kryo.register(java.util.ArrayList.class);
+        
         kryo.setRegistrationRequired(false);
-        // 解决循环引用问题
         kryo.setReferences(true);
         return kryo;
     });
