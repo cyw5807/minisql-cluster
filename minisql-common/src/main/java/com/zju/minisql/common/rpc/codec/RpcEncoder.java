@@ -1,6 +1,7 @@
 package com.zju.minisql.common.rpc.codec;
 
 import com.zju.minisql.common.rpc.RpcRequest;
+import com.zju.minisql.common.rpc.RpcResponse;
 import com.zju.minisql.common.rpc.serialize.Serializer;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
@@ -48,7 +49,7 @@ public class RpcEncoder extends MessageToByteEncoder<Object> {
 
     private long getRequestId(Object msg) {
         if (msg instanceof RpcRequest) return ((RpcRequest) msg).getRequestId();
-        // 如果是 RpcResponse，自行强转获取，此处省略具体判断
-        return 0L; 
+        if (msg instanceof RpcResponse) return ((RpcResponse) msg).getRequestId();
+        return 0L;
     }
 }

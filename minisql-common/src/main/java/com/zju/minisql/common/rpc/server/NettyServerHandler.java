@@ -26,6 +26,7 @@ public class NettyServerHandler extends SimpleChannelInboundHandler<RpcRequest> 
         try {
             // 2. 利用反射执行对应的方法
             Method method = service.getClass().getMethod(request.getMethodName(), request.getParameterTypes());
+            method.setAccessible(true);
             Object result = method.invoke(service, request.getParameters());
             
             // 3. 封装成功结果

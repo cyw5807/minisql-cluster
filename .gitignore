@@ -22,3 +22,5 @@ pom.xml.versionsBackup
 .DS_Store
 Thumbs.db
 *.log
+
+doc/
