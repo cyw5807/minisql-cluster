@@ -2,6 +2,8 @@ package com.zju.minisql.worker;
 
 import com.zju.minisql.common.rpc.server.NettyRpcServer;
 import com.zju.minisql.common.rpc.server.ServiceProvider;
+import com.zju.minisql.worker.query.DistributedQueryTaskServiceImpl;
+import com.zju.minisql.worker.query.InMemoryTableRepository;
 import com.zju.minisql.worker.service.MockSqlExecuteServiceImpl;
 import com.zju.minisql.worker.zk.WorkerRegistry;
 
@@ -19,9 +21,12 @@ public class WorkerStarter {
         // 1. 初始化本地服务提供者
         ServiceProvider serviceProvider = new ServiceProvider();
         
-        // 注册 Mock 服务
+        // 注册旧的字符串 SQL 测试服务，兼容组长当前已有联调代码
         serviceProvider.registerService(new MockSqlExecuteServiceImpl());
+        // 注册组员 B 新增的分布式子任务执行服务
+        serviceProvider.registerService(new DistributedQueryTaskServiceImpl(InMemoryTableRepository.demoRepositoryFor(workerAddress)));
         System.out.println("本地服务初始化完成。");
+        System.out.println("已加载演示数据，并注册分布式查询执行服务。");
 
         // 2. 向 ZooKeeper 注册当前 Worker 节点
         WorkerRegistry registry = new WorkerRegistry(zkAddress);
