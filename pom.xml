@@ -29,6 +29,7 @@
     </dependencies>
   </dependencyManagement>
   <modules>
+    <module>minisql-client</module>
     <module>minisql-common</module>
     <module>minisql-master</module>
     <module>minisql-worker</module>

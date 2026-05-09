@@ -4,6 +4,8 @@ import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 
+import com.zju.minisql.common.zk.WorkerDiscovery;
+
 /**
  * 模拟 Master 节点的服务发现能力
  */

@@ -6,6 +6,7 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
 public class NettyServerHandler extends SimpleChannelInboundHandler<RpcRequest> {
@@ -32,12 +33,20 @@ public class NettyServerHandler extends SimpleChannelInboundHandler<RpcRequest> 
             // 3. 封装成功结果
             response = RpcResponse.success(request.getRequestId(), result);
         } catch (Exception e) {
+            // 打印完整的服务端异常栈，方便服务端开发人员排错
             e.printStackTrace();
-            // 3. 封装失败异常
-            response = RpcResponse.fail(request.getRequestId(), e);
+            
+            // 【核心修复】：剥去反射包装的塑料布，拿到真正的业务异常
+            Throwable realCause = e;
+            if (e instanceof InvocationTargetException && e.getCause() != null) {
+                realCause = e.getCause();
+            }
+            
+            // 4. 封装失败异常 (跨网络传回真实的错误信息)
+            response = RpcResponse.fail(request.getRequestId(), realCause.toString());
         }
 
-        // 4. 将响应写回网络并添加监听器
+        // 5. 将响应写回网络并添加监听器
         ctx.writeAndFlush(response).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
                 System.err.println("RPC 响应发送失败: " + future.cause().getMessage());
