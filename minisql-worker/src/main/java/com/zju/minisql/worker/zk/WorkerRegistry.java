@@ -4,6 +4,7 @@ import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.KeeperException;
 
 /**
  * Worker 节点注册中心
@@ -28,11 +29,18 @@ public class WorkerRegistry {
         
         // 确保父目录存在
         if (zkClient.checkExists().forPath(WORKERS_ROOT_PATH) == null) {
-            zkClient.create().creatingParentsIfNeeded().withMode(CreateMode.PERSISTENT).forPath(WORKERS_ROOT_PATH);
+            try {
+                zkClient.create().creatingParentsIfNeeded().withMode(CreateMode.PERSISTENT).forPath(WORKERS_ROOT_PATH);
+            } catch (KeeperException.NodeExistsException ignored) {
+                // 多 Worker 并发启动时可能会同时创建父节点，忽略即可。
+            }
         }
 
         // 创建临时节点
         String path = WORKERS_ROOT_PATH + "/" + workerAddress;
+        if (zkClient.checkExists().forPath(path) != null) {
+            zkClient.delete().forPath(path);
+        }
         zkClient.create().withMode(CreateMode.EPHEMERAL).forPath(path);
         
         System.out.println("====== 本地 Worker 已成功注册到 ZK 集群 ======");

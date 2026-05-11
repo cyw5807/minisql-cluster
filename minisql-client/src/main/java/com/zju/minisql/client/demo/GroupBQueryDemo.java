@@ -1,12 +1,26 @@
 package com.zju.minisql.client.demo;
 
+import com.zju.minisql.common.cluster.NodeInfo;
+import com.zju.minisql.common.cluster.NodeLoad;
+import com.zju.minisql.common.cluster.meta.ZkMetadataService;
+import com.zju.minisql.common.distribution.DistributionManager;
+import com.zju.minisql.common.distribution.DistributionManagerImpl;
+import com.zju.minisql.common.loadbalance.LoadBalancer;
+import com.zju.minisql.common.loadbalance.LoadBalancerImpl;
 import com.zju.minisql.common.meta.ColumnMeta;
+import com.zju.minisql.common.meta.MetadataManager;
 import com.zju.minisql.common.meta.TableMeta;
 import com.zju.minisql.common.query.model.QueryResult;
+import com.zju.minisql.common.query.model.Row;
+import com.zju.minisql.common.replica.FailoverHandler;
+import com.zju.minisql.common.replica.PrimaryHandler;
+import com.zju.minisql.common.replica.ReplicaHandler;
+import com.zju.minisql.common.replica.ReplicaManager;
+import com.zju.minisql.common.replica.ReplicaManagerImpl;
 import com.zju.minisql.common.rpc.serialize.KryoSerializer;
+import com.zju.minisql.common.zk.WorkerDiscovery;
 import com.zju.minisql.client.network.RpcFragmentTaskClient;
 
-// 【架构大挪移】：这些计算平面的类即将被我们移到 Client 模块
 import com.zju.minisql.client.coordinator.DistributedQueryCoordinator;
 import com.zju.minisql.client.merger.ResultMerger;
 import com.zju.minisql.client.metadata.MetadataManagerTableMetadataProvider;
@@ -14,10 +28,6 @@ import com.zju.minisql.client.parser.JSqlParserSqlParser;
 import com.zju.minisql.client.planner.SimpleDistributedPlanGenerator;
 import com.zju.minisql.client.planner.SimpleLogicalPlanner;
 import com.zju.minisql.client.router.HashQueryRouter;
-
-// 【基建下沉】：这两位负责 ZK 的类即将被我们下沉到 Common 模块
-import com.zju.minisql.common.zk.WorkerDiscovery;
-import com.zju.minisql.common.meta.MetadataManager;
 
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
@@ -27,6 +37,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 组员 B 查询引擎真实联调演示入口 (Smart Client 版)
@@ -70,15 +81,27 @@ public class GroupBQueryDemo {
             MetadataManager metadataManager = new MetadataManager(zkClient, new KryoSerializer());
             metadataManager.init();
             ensureDemoTables(metadataManager);
+            List<String> activeWorkers = sortedWorkers(workerDiscovery);
+
+            ZkMetadataService zkMetadataService = new ZkMetadataService(zkClient);
+            zkMetadataService.init();
+            initPartitionMetadata(zkMetadataService, activeWorkers);
+
+            DistributionManager distributionManager = new DistributionManagerImpl(zkMetadataService);
+            LoadBalancer loadBalancer = new LoadBalancerImpl(zkMetadataService, distributionManager);
+            ReplicaManager replicaManager = new ReplicaManagerImpl(
+                    zkMetadataService,
+                    new PrimaryHandler((nodeInfo, partitionId, row) -> true),
+                    new ReplicaHandler(loadBalancer),
+                    new FailoverHandler(zkMetadataService)
+            );
+
+            printModuleWiring(distributionManager, loadBalancer, replicaManager, activeWorkers);
 
             DistributedQueryCoordinator coordinator = new DistributedQueryCoordinator(
                     new JSqlParserSqlParser(),
                     new SimpleLogicalPlanner(new MetadataManagerTableMetadataProvider(metadataManager)),
-                    new SimpleDistributedPlanGenerator(new HashQueryRouter(() -> {
-                        List<String> workers = new ArrayList<>(workerDiscovery.getActiveWorkers());
-                        workers.sort(Comparator.naturalOrder());
-                        return workers;
-                    })),
+                    new SimpleDistributedPlanGenerator(new HashQueryRouter(() -> sortedWorkers(workerDiscovery), distributionManager)),
                     new RpcFragmentTaskClient(),
                     new ResultMerger()
             );
@@ -134,5 +157,44 @@ public class GroupBQueryDemo {
             metadataManager.createTable(scoreTable);
             System.out.println("已自动初始化演示表 score 的元数据。");
         }
+    }
+
+    private static List<String> sortedWorkers(WorkerDiscovery workerDiscovery) {
+        List<String> workers = new ArrayList<>(workerDiscovery.getActiveWorkers());
+        workers.sort(Comparator.naturalOrder());
+        return workers;
+    }
+
+    private static void initPartitionMetadata(ZkMetadataService metadataService, List<String> workers) {
+        if (workers.isEmpty()) {
+            return;
+        }
+        List<NodeInfo> nodes = workers.stream().map(NodeInfo::fromAddress).collect(Collectors.toList());
+        for (int partitionId = 0; partitionId < 1024; partitionId++) {
+            NodeInfo primary = nodes.get(partitionId % nodes.size());
+            metadataService.updatePartitionOwner(partitionId, primary);
+            List<NodeInfo> replicas = nodes.stream()
+                    .filter(node -> !node.getNodeId().equals(primary.getNodeId()))
+                    .collect(Collectors.toList());
+            metadataService.upsertReplicas(partitionId, replicas);
+        }
+    }
+
+    private static void printModuleWiring(DistributionManager distributionManager,
+                                          LoadBalancer loadBalancer,
+                                          ReplicaManager replicaManager,
+                                          List<String> workers) {
+        String probeKey = "1001";
+        NodeInfo writeTarget = distributionManager.routeForWrite(probeKey);
+        System.out.println("[A-模块] 数据分布路由 key=" + probeKey + " -> " + writeTarget.address());
+
+        for (String worker : workers) {
+            loadBalancer.reportNodeLoad(worker, new NodeLoad(worker, 40, 100, 120));
+        }
+
+        int partitionId = Math.floorMod(probeKey.hashCode(), 1024);
+        Row demoRow = Row.of("id", 1001, "name", "Alice");
+        System.out.println("[A-模块] 副本写入结果: " + replicaManager.write(partitionId, demoRow).getMessage());
+        System.out.println("[A-模块] 副本读取路由: " + replicaManager.read(partitionId, probeKey).getMessage());
     }
 }

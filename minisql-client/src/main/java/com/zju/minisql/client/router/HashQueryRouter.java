@@ -1,5 +1,7 @@
 package com.zju.minisql.client.router;
 
+import com.zju.minisql.common.cluster.NodeInfo;
+import com.zju.minisql.common.distribution.DistributionManager;
 import com.zju.minisql.common.meta.ColumnMeta;
 import com.zju.minisql.common.query.model.FilterCondition;
 import com.zju.minisql.client.planner.LogicalPlan;
@@ -16,9 +18,15 @@ import java.util.function.Supplier;
 public class HashQueryRouter implements QueryRouter {
 
     private final Supplier<List<String>> activeWorkerSupplier;
+    private final DistributionManager distributionManager;
 
     public HashQueryRouter(Supplier<List<String>> activeWorkerSupplier) {
+        this(activeWorkerSupplier, null);
+    }
+
+    public HashQueryRouter(Supplier<List<String>> activeWorkerSupplier, DistributionManager distributionManager) {
         this.activeWorkerSupplier = activeWorkerSupplier;
+        this.distributionManager = distributionManager;
     }
 
     @Override
@@ -39,7 +47,13 @@ public class HashQueryRouter implements QueryRouter {
                 && filterCondition != null
                 && filterCondition.getOperator() == FilterCondition.ComparisonOperator.EQ
                 && primaryKey.getColumnName().equalsIgnoreCase(filterCondition.getColumnName())) {
-            int partitionId = Math.floorMod(String.valueOf(filterCondition.getValue()).hashCode(), workers.size());
+            String shardKey = String.valueOf(filterCondition.getValue());
+            if (distributionManager != null) {
+                NodeInfo node = distributionManager.routeForRead(shardKey);
+                int partitionId = Math.floorMod(shardKey.hashCode(), 1024);
+                return List.of(new ExecutionTarget(partitionId, node.address()));
+            }
+            int partitionId = Math.floorMod(shardKey.hashCode(), workers.size());
             return List.of(new ExecutionTarget(partitionId, workers.get(partitionId)));
         }
 
