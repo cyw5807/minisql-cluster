@@ -15,6 +15,9 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 public class NettyRpcServer {
 
     private final ServiceProvider serviceProvider;
+    private EventLoopGroup bossGroup;
+    private EventLoopGroup workerGroup;
+    private Channel serverChannel;
 
     public NettyRpcServer(ServiceProvider serviceProvider) {
         this.serviceProvider = serviceProvider;
@@ -26,8 +29,8 @@ public class NettyRpcServer {
      */
     public void start(int port) {
         // Boss 线程池负责接收新连接，Worker 线程池负责处理读写
-        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        bossGroup = new NioEventLoopGroup(1);
+        workerGroup = new NioEventLoopGroup();
 
         try {
             ServerBootstrap bootstrap = new ServerBootstrap();
@@ -50,16 +53,37 @@ public class NettyRpcServer {
                     });
 
             ChannelFuture future = bootstrap.bind(port).sync();
+            serverChannel = future.channel();
             System.out.println("RPC 服务端已启动，正在监听端口: " + port);
             
             // 阻塞当前线程直到服务端 Channel 关闭
-            future.channel().closeFuture().sync();
+            serverChannel.closeFuture().sync();
         } catch (InterruptedException e) {
             System.err.println("RPC 服务端启动被中断");
             Thread.currentThread().interrupt();
         } finally {
+            shutdownEventLoops();
+        }
+    }
+
+    /**
+     * 主动关闭 RPC 服务端，主要用于集成测试释放随机端口。
+     */
+    public void stop() {
+        if (serverChannel != null) {
+            serverChannel.close();
+        }
+        shutdownEventLoops();
+    }
+
+    private void shutdownEventLoops() {
+        if (bossGroup != null) {
             bossGroup.shutdownGracefully();
+            bossGroup = null;
+        }
+        if (workerGroup != null) {
             workerGroup.shutdownGracefully();
+            workerGroup = null;
         }
     }
 }
