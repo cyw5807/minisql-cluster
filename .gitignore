@@ -24,3 +24,5 @@ Thumbs.db
 *.log
 
 doc/
+apache-zookeeper-3.9.5-bin/
+worker-data/

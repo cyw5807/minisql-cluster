@@ -5,7 +5,13 @@ import com.zju.minisql.common.rpc.server.ServiceProvider;
 import com.zju.minisql.worker.query.DistributedQueryTaskServiceImpl;
 import com.zju.minisql.worker.query.InMemoryTableRepository;
 import com.zju.minisql.worker.service.MockSqlExecuteServiceImpl;
+import com.zju.minisql.worker.storage.LocalStorageEngine;
+import com.zju.minisql.worker.storage.LocalStorageEngineImpl;
+import com.zju.minisql.worker.storage.model.Row;
 import com.zju.minisql.worker.zk.WorkerRegistry;
+
+import java.nio.file.Path;
+import java.util.HashMap;
 
 /**
  * Worker 节点启动入口 (Docker 适配版)
@@ -42,8 +48,15 @@ public class WorkerStarter {
         serviceProvider.registerService(new MockSqlExecuteServiceImpl());
         // 注册组员 B 新增的分布式子任务执行服务
         serviceProvider.registerService(new DistributedQueryTaskServiceImpl(InMemoryTableRepository.demoRepositoryFor(workerAddress)));
-        System.out.println("✅ 本地服务初始化完成。");
-        System.out.println("✅ 已加载演示数据，并注册分布式查询执行服务。");
+
+        // 初始化 A 组本地存储引擎，作为副本与迁移模块的数据承载层。
+        LocalStorageEngine storageEngine = new LocalStorageEngineImpl(Path.of("worker-data", "port-" + port));
+        Row bootRow = new Row("boot", "system", 0, new HashMap<>());
+        bootRow.getColumns().put("status", "ready");
+        storageEngine.insert("system", bootRow);
+        System.out.println("本地服务初始化完成。");
+        System.out.println("已加载演示数据，并注册分布式查询执行服务。");
+        System.out.println("本地存储引擎初始化完成，启动记录: " + storageEngine.get("system", "boot"));
 
         // 3. 向 ZooKeeper 注册当前 Worker 节点
         WorkerRegistry registry = new WorkerRegistry(zkAddress);
