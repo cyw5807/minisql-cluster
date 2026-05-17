@@ -17,6 +17,11 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.statement.create.table.ColumnDefinition;
+import net.sf.jsqlparser.statement.create.table.CreateTable;
+import net.sf.jsqlparser.statement.delete.Delete;
+import net.sf.jsqlparser.statement.drop.Drop;
+import net.sf.jsqlparser.statement.insert.Insert;
 import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.Join;
 import net.sf.jsqlparser.statement.select.PlainSelect;
@@ -28,7 +33,7 @@ import java.util.List;
 
 /**
  * 基于 JSqlParser 的 SQL 解析实现。
- * 当前阶段优先支持单表 SELECT-FROM-WHERE-GROUP BY 查询，以及双表等值 Join。
+ * 【重大升级】：全面支持 MiniSQL 核心语法，包括 SELECT、INSERT、DELETE、CREATE TABLE 和 DROP TABLE。
  */
 public class JSqlParserSqlParser implements SqlParser {
 
@@ -36,42 +41,124 @@ public class JSqlParserSqlParser implements SqlParser {
     public QueryAst parse(String sql) {
         try {
             Statement statement = CCJSqlParserUtil.parse(sql);
-            if (!(statement instanceof Select)) {
-                throw new IllegalArgumentException("当前仅支持 SELECT 查询");
-            }
-            PlainSelect plainSelect = (PlainSelect) ((Select) statement).getSelectBody();
-            if (!(plainSelect.getFromItem() instanceof Table)) {
-                throw new IllegalArgumentException("当前仅支持单表或双表 Join 查询");
+            QueryAst queryAst = new QueryAst();
+
+            // 路由不同的 SQL 语句到不同的解析分支
+            if (statement instanceof Select) {
+                queryAst.setStatementType("SELECT");
+                parseSelect((Select) statement, queryAst);
+            } else if (statement instanceof Insert) {
+                queryAst.setStatementType("INSERT");
+                parseInsert((Insert) statement, queryAst);
+            } else if (statement instanceof Delete) {
+                queryAst.setStatementType("DELETE");
+                parseDelete((Delete) statement, queryAst);
+            } else if (statement instanceof CreateTable) {
+                queryAst.setStatementType("CREATE_TABLE");
+                parseCreateTable((CreateTable) statement, queryAst);
+            } else if (statement instanceof Drop) {
+                queryAst.setStatementType("DROP_TABLE");
+                parseDrop((Drop) statement, queryAst);
+            } else {
+                throw new IllegalArgumentException("当前系统暂不支持的 SQL 语句类型: " + statement.getClass().getSimpleName());
             }
 
-            QueryAst queryAst = new QueryAst();
-            queryAst.setTableName(((Table) plainSelect.getFromItem()).getName());
-            parseJoin(plainSelect, queryAst);
-            parseSelectItems(plainSelect, queryAst);
-            queryAst.setFilterCondition(parseWhere(plainSelect.getWhere()));
-            parseGroupBy(plainSelect, queryAst);
             return queryAst;
         } catch (JSQLParserException e) {
             throw new IllegalArgumentException("SQL 解析失败: " + e.getMessage(), e);
         }
     }
 
-    private void parseJoin(PlainSelect plainSelect, QueryAst queryAst) {
-        List<Join> joins = plainSelect.getJoins();
-        if (joins == null || joins.isEmpty()) {
-            return;
+    // ==========================================
+    // 1. 解析 SELECT (原生查询逻辑平移)
+    // ==========================================
+    private void parseSelect(Select select, QueryAst queryAst) {
+        if (!(select.getSelectBody() instanceof PlainSelect)) {
+            throw new IllegalArgumentException("当前仅支持基础的 SELECT 查询");
         }
-        if (joins.size() > 1) {
-            throw new IllegalArgumentException("当前仅支持单个 Join");
+        PlainSelect plainSelect = (PlainSelect) select.getSelectBody();
+        if (!(plainSelect.getFromItem() instanceof Table)) {
+            throw new IllegalArgumentException("当前仅支持单表或双表 Join 查询");
         }
 
+        queryAst.setTableName(((Table) plainSelect.getFromItem()).getName());
+        parseJoin(plainSelect, queryAst);
+        parseSelectItems(plainSelect, queryAst);
+        queryAst.setFilterCondition(parseWhere(plainSelect.getWhere()));
+        parseGroupBy(plainSelect, queryAst);
+    }
+
+    // ==========================================
+    // 2. 解析 INSERT 插入语句
+    // ==========================================
+    private void parseInsert(Insert insert, QueryAst queryAst) {
+        queryAst.setTableName(insert.getTable().getName());
+
+        if (insert.getItemsList() instanceof ExpressionList) {
+            ExpressionList exprList = (ExpressionList) insert.getItemsList();
+            List<Object> values = new ArrayList<>();
+            for (Expression expr : exprList.getExpressions()) {
+                values.add(extractLiteralValue(expr));
+            }
+            queryAst.setInsertValues(values);
+        } else {
+            throw new IllegalArgumentException("当前 INSERT 语句仅支持基础的单行 VALUES 插入");
+        }
+    }
+
+    // ==========================================
+    // 3. 解析 DELETE 删除语句
+    // ==========================================
+    private void parseDelete(Delete delete, QueryAst queryAst) {
+        queryAst.setTableName(delete.getTable().getName());
+        // 直接复用我们写好的 WHERE 条件解析逻辑！
+        queryAst.setFilterCondition(parseWhere(delete.getWhere()));
+    }
+
+    // ==========================================
+    // 4. 解析 CREATE TABLE 建表语句 (转换解耦)
+    // ==========================================
+    private void parseCreateTable(CreateTable createTable, QueryAst queryAst) {
+        queryAst.setTableName(createTable.getTable().getName());
+        
+        List<ColumnDefinition> jsqlColumns = createTable.getColumnDefinitions();
+        if (jsqlColumns != null && !jsqlColumns.isEmpty()) {
+            List<QueryAst.ColumnDef> myColumnDefs = new ArrayList<>();
+            for (ColumnDefinition jsqlCol : jsqlColumns) {
+                // 将 JSqlParser 的复杂对象，映射为我们 common 模块里的轻量级纯净对象
+                myColumnDefs.add(new QueryAst.ColumnDef(
+                        jsqlCol.getColumnName(), 
+                        jsqlCol.getColDataType().getDataType()
+                ));
+            }
+            queryAst.setColumnDefinitions(myColumnDefs);
+        } else {
+            throw new IllegalArgumentException("CREATE TABLE 必须包含至少一个列定义");
+        }
+    }
+
+    // ==========================================
+    // 5. 解析 DROP TABLE 删表语句
+    // ==========================================
+    private void parseDrop(Drop drop, QueryAst queryAst) {
+        if (!"TABLE".equalsIgnoreCase(drop.getType())) {
+            throw new IllegalArgumentException("当前 DROP 仅支持 DROP TABLE");
+        }
+        queryAst.setTableName(drop.getName().getName());
+    }
+
+
+    // ==========================================
+    // 以下为原有的基础组件解析方法，完美保留
+    // ==========================================
+    private void parseJoin(PlainSelect plainSelect, QueryAst queryAst) {
+        List<Join> joins = plainSelect.getJoins();
+        if (joins == null || joins.isEmpty()) return;
+        if (joins.size() > 1) throw new IllegalArgumentException("当前仅支持单个 Join");
+
         Join join = joins.get(0);
-        if (!(join.getRightItem() instanceof Table)) {
-            throw new IllegalArgumentException("当前仅支持表与表之间的 Join");
-        }
-        if (!(join.getOnExpression() instanceof BinaryExpression)) {
-            throw new IllegalArgumentException("当前仅支持等值 Join 条件");
-        }
+        if (!(join.getRightItem() instanceof Table)) throw new IllegalArgumentException("当前仅支持表与表之间的 Join");
+        if (!(join.getOnExpression() instanceof BinaryExpression)) throw new IllegalArgumentException("当前仅支持等值 Join 条件");
 
         BinaryExpression onExpression = (BinaryExpression) join.getOnExpression();
         if (!(onExpression.getLeftExpression() instanceof Column) || !(onExpression.getRightExpression() instanceof Column)) {
@@ -96,7 +183,6 @@ public class JSqlParserSqlParser implements SqlParser {
                 continue;
             }
 
-            // 老版本 JSqlParser 必须强转为 SelectExpressionItem 才能获取表达式
             if (selectItem instanceof net.sf.jsqlparser.statement.select.SelectExpressionItem) {
                 net.sf.jsqlparser.statement.select.SelectExpressionItem exprItem = 
                         (net.sf.jsqlparser.statement.select.SelectExpressionItem) selectItem;
@@ -125,7 +211,6 @@ public class JSqlParserSqlParser implements SqlParser {
         AggregateFunction aggregateFunction = AggregateFunction.valueOf(functionName);
         String columnName = "*";
         
-        // 【修复点 2】：去掉了 <?>，并且使用 .getExpressions() 来安全获取参数列表
         ExpressionList parameters = function.getParameters();
         if (parameters != null && parameters.getExpressions() != null 
             && !parameters.getExpressions().isEmpty() 
@@ -138,17 +223,11 @@ public class JSqlParserSqlParser implements SqlParser {
     }
 
     private FilterCondition parseWhere(Expression whereExpression) {
-        if (whereExpression == null) {
-            return null;
-        }
-        if (!(whereExpression instanceof BinaryExpression)) {
-            throw new IllegalArgumentException("当前仅支持单个二元比较条件");
-        }
+        if (whereExpression == null) return null;
+        if (!(whereExpression instanceof BinaryExpression)) throw new IllegalArgumentException("当前仅支持单个二元比较条件");
 
         BinaryExpression binaryExpression = (BinaryExpression) whereExpression;
-        if (!(binaryExpression.getLeftExpression() instanceof Column)) {
-            throw new IllegalArgumentException("WHERE 左侧必须是列名");
-        }
+        if (!(binaryExpression.getLeftExpression() instanceof Column)) throw new IllegalArgumentException("WHERE 左侧必须是列名");
 
         String columnName = extractColumnRef((Column) binaryExpression.getLeftExpression());
         Object value = extractLiteralValue(binaryExpression.getRightExpression());
@@ -161,9 +240,7 @@ public class JSqlParserSqlParser implements SqlParser {
         if (plainSelect.getGroupBy() != null && plainSelect.getGroupBy().getGroupByExpressionList() != null) {
             for (Object expressionObject : plainSelect.getGroupBy().getGroupByExpressionList().getExpressions()) {
                 Expression expression = (Expression) expressionObject;
-                if (!(expression instanceof Column)) {
-                    throw new IllegalArgumentException("当前仅支持按列进行 GROUP BY");
-                }
+                if (!(expression instanceof Column)) throw new IllegalArgumentException("当前仅支持按列进行 GROUP BY");
                 groupByColumns.add(extractColumnRef((Column) expression));
             }
         }
@@ -171,35 +248,22 @@ public class JSqlParserSqlParser implements SqlParser {
     }
 
     private Object extractLiteralValue(Expression expression) {
-        if (expression instanceof LongValue) {
-            return ((LongValue) expression).getValue();
-        }
-        if (expression instanceof DoubleValue) {
-            return ((DoubleValue) expression).getValue();
-        }
-        if (expression instanceof StringValue) {
-            return ((StringValue) expression).getValue();
-        }
+        if (expression instanceof LongValue) return ((LongValue) expression).getValue();
+        if (expression instanceof DoubleValue) return ((DoubleValue) expression).getValue();
+        if (expression instanceof StringValue) return ((StringValue) expression).getValue();
         throw new IllegalArgumentException("当前仅支持数字和字符串字面量");
     }
 
     private FilterCondition.ComparisonOperator parseOperator(String operator) {
         switch (operator) {
-            case "=":
-                return FilterCondition.ComparisonOperator.EQ;
+            case "=": return FilterCondition.ComparisonOperator.EQ;
             case "<>":
-            case "!=":
-                return FilterCondition.ComparisonOperator.NE;
-            case ">":
-                return FilterCondition.ComparisonOperator.GT;
-            case ">=":
-                return FilterCondition.ComparisonOperator.GTE;
-            case "<":
-                return FilterCondition.ComparisonOperator.LT;
-            case "<=":
-                return FilterCondition.ComparisonOperator.LTE;
-            default:
-                throw new IllegalArgumentException("当前不支持的比较操作符: " + operator);
+            case "!=": return FilterCondition.ComparisonOperator.NE;
+            case ">": return FilterCondition.ComparisonOperator.GT;
+            case ">=": return FilterCondition.ComparisonOperator.GTE;
+            case "<": return FilterCondition.ComparisonOperator.LT;
+            case "<=": return FilterCondition.ComparisonOperator.LTE;
+            default: throw new IllegalArgumentException("当前不支持的比较操作符: " + operator);
         }
     }
 

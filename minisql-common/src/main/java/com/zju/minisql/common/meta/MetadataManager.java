@@ -9,12 +9,15 @@ import java.util.List;
 
 /**
  * 集群元数据管理器
- * 负责将表结构信息 (Schema) 持久化到 ZooKeeper 中
+ * 不仅负责将表结构信息 (Schema) 持久化，同时兼管分布式集群的 Worker 节点服务发现与动态感知。
  */
 public class MetadataManager {
 
     // 严格遵循设计报告：持久化元数据根路径
     private static final String META_ROOT_PATH = "/minisql/metadata";
+    
+    // 🌟 新增：分布式计算集群 Worker 服务注册与发现的根路径
+    private static final String WORKERS_ROOT_PATH = "/minisql/workers";
     
     private final CuratorFramework zkClient;
     private final Serializer serializer;
@@ -25,12 +28,19 @@ public class MetadataManager {
     }
 
     /**
-     * 初始化：确保根路径存在
+     * 初始化：确保所有核心 ZK 根路径均已存在
      */
     public void init() throws Exception {
+        // 初始化 Schema 持久化路径
         if (zkClient.checkExists().forPath(META_ROOT_PATH) == null) {
             zkClient.create().creatingParentsIfNeeded().withMode(CreateMode.PERSISTENT).forPath(META_ROOT_PATH);
             System.out.println("成功初始化元数据根目录: " + META_ROOT_PATH);
+        }
+        
+        // 🌟 新增：初始化 Worker 注册中心路径
+        if (zkClient.checkExists().forPath(WORKERS_ROOT_PATH) == null) {
+            zkClient.create().creatingParentsIfNeeded().withMode(CreateMode.PERSISTENT).forPath(WORKERS_ROOT_PATH);
+            System.out.println("成功初始化 Worker 发现中心根目录: " + WORKERS_ROOT_PATH);
         }
     }
 
@@ -87,6 +97,23 @@ public class MetadataManager {
     public List<String> getAllTableNames() throws Exception {
         if (zkClient.checkExists().forPath(META_ROOT_PATH) != null) {
             return zkClient.getChildren().forPath(META_ROOT_PATH);
+        }
+        return new ArrayList<>();
+    }
+
+    /**
+     * 🌟 5. 新增：全动态获取当前时刻真正存活的 Worker 节点列表
+     */
+    public List<String> getActiveWorkers() throws Exception {
+        if (zkClient.checkExists().forPath(WORKERS_ROOT_PATH) != null) {
+            // 获取 ZK 的无序子节点列表
+            List<String> workers = zkClient.getChildren().forPath(WORKERS_ROOT_PATH);
+            
+            // ⭐ 终极修复：强制按字典序排序！
+            // 确保读路由和写路由拿到的永远是固定顺序 (如 9012, 9013, 9014)
+            java.util.Collections.sort(workers);
+            
+            return workers;
         }
         return new ArrayList<>();
     }

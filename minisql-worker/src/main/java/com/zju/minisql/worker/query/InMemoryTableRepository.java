@@ -6,55 +6,50 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 课程作业阶段的内存表仓库。
- * 在组员 A 的真实存储引擎接入前，先用它打通查询执行链路。
+ * 工业级弹性的内存表仓库。
+ * 【特性】：
+ * 1. 践行控制流与数据流分离，作为纯粹的弹性数据桶，不硬编码任何拓扑人数（如3个桶），天然支持节点动态下线。
+ * 2. 彻底移除预加载的 Mock 数据，转为完全由后续运行期 INSERT 语句动态写入。
  */
 public class InMemoryTableRepository {
 
-    private final Map<String, List<Row>> tables = new HashMap<>();
+    // 使用 ConcurrentHashMap 确保高并发 RPC 读写时的线程安全
+    private final Map<String, List<Row>> tables = new ConcurrentHashMap<>();
 
+    /**
+     * 覆盖或初始化整张表的数据（常用于批量同步）
+     */
     public void putTable(String tableName, List<Row> rows) {
-        tables.put(tableName.toLowerCase(), rows);
+        tables.put(tableName.toLowerCase(), new ArrayList<>(rows));
     }
 
+    /**
+     * 获取当前 Worker 节点本地存储的局部数据分片
+     */
     public List<Row> getTableRows(String tableName) {
         return tables.getOrDefault(tableName.toLowerCase(), List.of());
     }
 
-    public static InMemoryTableRepository demoRepositoryFor(String workerAddress) {
-        InMemoryTableRepository repository = new InMemoryTableRepository();
-        List<Row> allStudents = List.of(
-                Row.of("id", 1001L, "name", "Alice", "dept", "CS", "score", 95L),
-                Row.of("id", 1002L, "name", "Bob", "dept", "EE", "score", 88L),
-                Row.of("id", 1003L, "name", "Carol", "dept", "CS", "score", 91L),
-                Row.of("id", 1004L, "name", "David", "dept", "ME", "score", 84L),
-                Row.of("id", 1005L, "name", "Eve", "dept", "EE", "score", 97L)
-        );
-        List<Row> allScores = List.of(
-                Row.of("id", 1001L, "course", "DistributedDB", "grade", 95L),
-                Row.of("id", 1002L, "course", "ComputerNetwork", "grade", 88L),
-                Row.of("id", 1003L, "course", "OperatingSystem", "grade", 91L),
-                Row.of("id", 1004L, "course", "MechanicalDesign", "grade", 84L),
-                Row.of("id", 1005L, "course", "PowerSystem", "grade", 97L)
-        );
-
-        int bucketIndex = workerAddress.endsWith(":9011") ? 0 : 1;
-        repository.putTable("student", partitionById(allStudents, bucketIndex, 2));
-        repository.putTable("score", partitionById(allScores, bucketIndex, 2));
-        return repository;
+    /**
+     * ⭐ 【核心新增】：单条数据动态插入能力！
+     * 用于支撑后续演示过程中，用户在 CLI 界面亲手敲入的 INSERT INTO 语句。
+     * 无论集群是3个节点还是因为下线变成了2个节点，Client 路由发过来的数据都会被该方法稳稳接住。
+     */
+    public synchronized void insertRow(String tableName, Row row) {
+        String key = tableName.toLowerCase();
+        // 如果表不存在（比如刚执行完 CREATE TABLE），则初始化一个空列表并追加数据
+        tables.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
     }
 
-    private static List<Row> partitionById(List<Row> rows, int bucketIndex, int bucketCount) {
-        List<Row> localRows = new ArrayList<>();
-        for (Row row : rows) {
-            long id = ((Number) row.get("id")).longValue();
-            int targetIndex = Math.floorMod(String.valueOf(id).hashCode(), bucketCount);
-            if (targetIndex == bucketIndex) {
-                localRows.add(row);
-            }
-        }
-        return localRows;
+    /**
+     * ⭐ 【框架装配方法】：返回一个纯净、空白的本地仓库
+     * 遵循组长指示：不提前注入任何测试数据，还原本质，静待后续展示过程中的物理写入。
+     */
+    public static InMemoryTableRepository demoRepositoryFor(String workerAddress) {
+        System.out.println("📦 存储节点 [" + workerAddress + "] 弹性数据仓库初始化成功，当前状态：[纯净空仓]，等待数据流接入...");
+        return new InMemoryTableRepository();
     }
 }

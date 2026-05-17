@@ -24,7 +24,14 @@ public class UnprocessedRequests {
         if (future != null) {
             future.complete(rpcResponse);
         } else {
-            throw new IllegalStateException("收到未知或已超时的响应, RequestID: " + rpcResponse.getRequestId());
+            // 因为引入了超时机制，迟到的回包会被路由到这里
+            // 我们不能抛出异常导致 Netty 线程崩溃，而是打印警告并安全丢弃
+            System.err.println("⚠️ 警告: 收到已超时或被丢弃的响应包, 已安全丢弃。RequestID: " + rpcResponse.getRequestId());
         }
+    }
+
+    // 3. 主动移除挂起的请求 (用于超时阻断等异常场景的内存清理)
+    public void remove(long requestId) {
+        UNPROCESSED_FUTURES.remove(requestId);
     }
 }

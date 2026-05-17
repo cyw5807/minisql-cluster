@@ -16,11 +16,44 @@ import java.util.Map;
 public class QueryFragmentExecutor {
 
     /**
-     * 提供按表名读取本地数据的抽象，便于单元测试和 Worker 实现复用。
+     * 提供按表名读取本地数据的抽象
      */
     @FunctionalInterface
     public interface TableRowProvider {
         List<Row> getTableRows(String tableName);
+    }
+
+    /**
+     * 🌟 新增：提供按表名写入本地数据的抽象
+     */
+    @FunctionalInterface
+    public interface TableRowInserter {
+        void insertRow(String tableName, Row row);
+    }
+
+    // 🌟 新增：包含写入能力的终极执行入口
+    public PartialQueryResult execute(String workerAddress, QueryAst queryAst, TableRowProvider provider, TableRowInserter inserter) {
+        // 拦截 INSERT 动作，执行纯粹的单行落盘
+        if ("INSERT".equals(queryAst.getStatementType())) {
+            Row newRow = new Row();
+            List<String> columns = queryAst.getProjectionColumns(); // Master 传过来的 Schema
+            List<Object> values = queryAst.getInsertValues();       // Parser 解析出的真实数据
+
+            // 将单纯的值数组 [1001, "Alice"] 映射为键值对 {"id": 1001, "name": "Alice"}
+            for (int i = 0; i < values.size(); i++) {
+                String colName = (columns != null && columns.size() > i) ? columns.get(i) : ("col" + i);
+                newRow.put(colName, values.get(i));
+            }
+            
+            // 触发真实的磁盘/内存写入！
+            inserter.insertRow(queryAst.getTableName(), newRow);
+            
+            // 插入操作不需要返回表格数据，返回一个空的集合作为 ACK 回执
+            return PartialQueryResult.forRows(workerAddress, Collections.emptyList());
+        }
+
+        // 否则，转交原有的 SELECT 查询算子树逻辑
+        return execute(workerAddress, queryAst, provider);
     }
 
     public PartialQueryResult execute(String workerAddress, QueryAst queryAst, List<Row> tableRows) {

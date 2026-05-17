@@ -114,11 +114,17 @@ public class NettyRpcClient {
     }
 
     /**
-     * 同步调用的包装方法 (兼容部分老旧业务代码)
+     * 同步调用的包装方法 (带严格的超时生命周期保护)
      */
     public RpcResponse sendRequestSync(RpcRequest rpcRequest, String targetIp, int targetPort) {
         try {
-            return sendRequestAsync(rpcRequest, targetIp, targetPort).get();
+            // ⭐ 核心阻断机制：最多阻塞等待 3000 毫秒，超时立刻抛出异常释放线程资源！
+            return sendRequestAsync(rpcRequest, targetIp, targetPort)
+                    .get(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            // 捕获超时异常，防止远端假死拖垮整个 Smart Client
+            unprocessedRequests.remove(rpcRequest.getRequestId()); // 清理挂起的 Future，防止内存泄漏
+            throw new RuntimeException("RPC 请求超时拦截 (3000ms)，远端 Worker 无响应: " + targetIp, e);
         } catch (InterruptedException | ExecutionException e) {
             throw new RuntimeException("同步 RPC 调用失败", e);
         }

@@ -72,6 +72,7 @@ public class GroupBQueryDemo {
             ensureDemoTables(metadataManager);
 
             DistributedQueryCoordinator coordinator = new DistributedQueryCoordinator(
+                    metadataManager,
                     new JSqlParserSqlParser(),
                     new SimpleLogicalPlanner(new MetadataManagerTableMetadataProvider(metadataManager)),
                     new SimpleDistributedPlanGenerator(new HashQueryRouter(() -> {

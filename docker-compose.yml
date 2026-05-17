@@ -1,0 +1,71 @@
+version: '3.8'
+services:
+  # 1. 注册中心节点
+  zookeeper:
+    image: zookeeper:3.8
+    container_name: minisql-zk
+    ports:
+      - "2181:2181" # 暴露给宿主机的 Client 用
+    # 🌟 新增：健康检查机制！探活 ZK 内部服务
+    healthcheck:
+      test: ["CMD-SHELL", "zkServer.sh status || exit 1"]
+      interval: 3s     # 每 3 秒检查一次
+      timeout: 5s      # 超时时间 5 秒
+      retries: 10      # 最多重试 10 次
+
+  # 2. 控制平面 (高可用双活 Master)
+  master-1:
+    build: ./minisql-master
+    container_name: minisql-master-active
+    depends_on:
+      # 🌟 新增：强制等待 ZK "健康" 后才启动
+      zookeeper:
+        condition: service_healthy
+    environment:
+      - ZK_ADDR=zookeeper:2181
+
+  master-2:
+    build: ./minisql-master
+    container_name: minisql-master-standby
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      - ZK_ADDR=zookeeper:2181
+
+  # 3. 数据平面 (3 个独立 Worker 节点)
+  worker-1:
+    build: ./minisql-worker
+    container_name: minisql-worker-9012
+    command: ["9012"]
+    ports:
+      - "9012:9012"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      - ZK_ADDR=zookeeper:2181
+
+  worker-2:
+    build: ./minisql-worker
+    container_name: minisql-worker-9013
+    command: ["9013"]
+    ports:
+      - "9013:9013"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      - ZK_ADDR=zookeeper:2181
+
+  worker-3:
+    build: ./minisql-worker
+    container_name: minisql-worker-9014
+    command: ["9014"]
+    ports:
+      - "9014:9014"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      - ZK_ADDR=zookeeper:2181

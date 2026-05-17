@@ -22,7 +22,8 @@ public class DistributedQueryTaskServiceImpl implements DistributedQueryTaskServ
         return queryFragmentExecutor.execute(
                 fragment.getWorkerAddress(),
                 fragment.getQueryAst(),
-                repository::getTableRows
+                repository::getTableRows,
+                repository::insertRow
         );
     }
 }

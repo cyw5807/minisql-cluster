@@ -39,10 +39,10 @@ public class WorkerDiscovery {
 
             if (event.getType() == PathChildrenCacheEvent.Type.CHILD_ADDED) {
                 activeWorkers.add(workerAddress);
-                System.out.println("✨ [动态扩容] 新 Worker 上线: " + workerAddress + "，当前可用列表: " + activeWorkers);
+                System.out.println("[动态扩容] 新 Worker 上线: " + workerAddress + "，当前可用列表: " + activeWorkers);
             } else if (event.getType() == PathChildrenCacheEvent.Type.CHILD_REMOVED) {
                 activeWorkers.remove(workerAddress);
-                System.out.println("⚠️ [故障感知] Worker 下线: " + workerAddress + "，当前可用列表: " + activeWorkers);
+                System.out.println("[故障感知] Worker 下线: " + workerAddress + "，当前可用列表: " + activeWorkers);
             }
         });
         
