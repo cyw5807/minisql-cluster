@@ -32,15 +32,35 @@ public class ReplicaManagerImpl implements ReplicaManager {
     }
 
     @Override
-    public ReplicaResult write(int partitionId, Row row) {
+    public ReplicaResult write(int partitionId, String tableName, Row row) {
         List<NodeInfo> nodes = loadPartitionNodes(partitionId);
         if (nodes.isEmpty()) {
             return ReplicaResult.fail("分片没有可用节点: " + partitionId);
         }
-        List<NodeInfo> replicas = new ArrayList<>(nodes);
-        replicas.remove(0);
-        boolean ok = primaryHandler.handleWrite(partitionId, row, replicas);
-        return ok ? ReplicaResult.ok("写入成功") : ReplicaResult.fail("副本确认数不足");
+        NodeInfo primary = nodes.get(0);
+        PrimaryHandler.WriteReport report = attemptWrite(partitionId, tableName, row, nodes);
+        if (report.isQuorumMet()) {
+            return ReplicaResult.ok("写入成功");
+        }
+
+        // primary 不可写时，自动触发一次故障切换并重试
+        if (!report.isPrimaryWriteOk()) {
+            onNodeFailure(primary.getNodeId());
+            List<NodeInfo> retriedNodes = loadPartitionNodes(partitionId);
+            if (retriedNodes.isEmpty() || retriedNodes.get(0).getNodeId().equals(primary.getNodeId())) {
+                return ReplicaResult.fail("primary 写入失败，且故障切换未成功");
+            }
+            PrimaryHandler.WriteReport retryReport = attemptWrite(partitionId, tableName, row, retriedNodes);
+            if (retryReport.isQuorumMet()) {
+                return ReplicaResult.ok("primary 故障切换后写入成功");
+            }
+            if (!retryReport.isPrimaryWriteOk()) {
+                return ReplicaResult.fail("新 primary 写入失败");
+            }
+            return ReplicaResult.fail("故障切换后副本确认数不足: ack=" + retryReport.getAck()
+                    + ", quorum=" + retryReport.getQuorum());
+        }
+        return ReplicaResult.fail("副本确认数不足: ack=" + report.getAck() + ", quorum=" + report.getQuorum());
     }
 
     @Override
@@ -93,5 +113,12 @@ public class ReplicaManagerImpl implements ReplicaManager {
             nodes.addAll(metadataService.getAllReplicas(id));
             return nodes;
         });
+    }
+
+    private PrimaryHandler.WriteReport attemptWrite(int partitionId, String tableName, Row row, List<NodeInfo> nodes) {
+        NodeInfo primary = nodes.get(0);
+        List<NodeInfo> replicas = new ArrayList<>(nodes);
+        replicas.remove(0);
+        return primaryHandler.handleWrite(partitionId, tableName, row, primary, replicas);
     }
 }

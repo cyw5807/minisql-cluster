@@ -27,12 +27,12 @@ class ReplicaManagerImplTest {
         LoadBalancer lb = new SimpleLoadBalancer();
         ReplicaManager replicaManager = new ReplicaManagerImpl(
                 metadata,
-                new PrimaryHandler((nodeInfo, pid, row) -> true),
+                new PrimaryHandler((nodeInfo, pid, tableName, row) -> true),
                 new ReplicaHandler(lb),
                 new FailoverHandler(metadata)
         );
 
-        ReplicaResult writeResult = replicaManager.write(partitionId, Row.of("id", 1001, "name", "alice"));
+        ReplicaResult writeResult = replicaManager.write(partitionId, "student", Row.of("id", 1001, "name", "alice"));
         Assertions.assertTrue(writeResult.isSuccess());
 
         ReplicaResult readResult = replicaManager.read(partitionId, "1001");
@@ -41,6 +41,29 @@ class ReplicaManagerImplTest {
 
         replicaManager.onNodeFailure("127.0.0.1:9012");
         Assertions.assertNotNull(metadata.getPrimaryNode(partitionId));
+        Assertions.assertNotEquals("127.0.0.1:9012", metadata.getPrimaryNode(partitionId).getNodeId());
+    }
+
+    @Test
+    void shouldAutoFailoverAndRetryWhenPrimaryWriteFails() {
+        InMemoryMetadata metadata = new InMemoryMetadata();
+        int partitionId = 2;
+        NodeInfo p = NodeInfo.fromAddress("127.0.0.1:9012");
+        NodeInfo r1 = NodeInfo.fromAddress("127.0.0.1:9013");
+        NodeInfo r2 = NodeInfo.fromAddress("127.0.0.1:9014");
+        metadata.owner.put(partitionId, p);
+        metadata.replicas.put(partitionId, new ArrayList<>(List.of(r1, r2)));
+
+        LoadBalancer lb = new SimpleLoadBalancer();
+        ReplicaManager replicaManager = new ReplicaManagerImpl(
+                metadata,
+                new PrimaryHandler((nodeInfo, pid, tableName, row) -> !"127.0.0.1:9012".equals(nodeInfo.getNodeId())),
+                new ReplicaHandler(lb),
+                new FailoverHandler(metadata)
+        );
+
+        ReplicaResult writeResult = replicaManager.write(partitionId, "student", Row.of("id", 2001, "name", "bob"));
+        Assertions.assertTrue(writeResult.isSuccess());
         Assertions.assertNotEquals("127.0.0.1:9012", metadata.getPrimaryNode(partitionId).getNodeId());
     }
 

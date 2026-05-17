@@ -2,7 +2,17 @@ package com.zju.minisql.client;
 
 import com.zju.minisql.common.query.model.QueryResult;
 import com.zju.minisql.common.rpc.serialize.KryoSerializer;
+import com.zju.minisql.common.cluster.meta.ZkMetadataService;
+import com.zju.minisql.common.distribution.DistributionManager;
+import com.zju.minisql.common.distribution.DistributionManagerImpl;
+import com.zju.minisql.common.loadbalance.LoadBalancer;
+import com.zju.minisql.common.loadbalance.LoadBalancerImpl;
+import com.zju.minisql.common.replica.FailoverHandler;
+import com.zju.minisql.common.replica.PrimaryHandler;
+import com.zju.minisql.common.replica.ReplicaHandler;
+import com.zju.minisql.common.replica.ReplicaManager;
 import com.zju.minisql.client.network.RpcFragmentTaskClient;
+import com.zju.minisql.client.network.ReplicaSyncRpcTransport;
 
 import com.zju.minisql.client.coordinator.DistributedQueryCoordinator;
 import com.zju.minisql.client.merger.ResultMerger;
@@ -64,6 +74,17 @@ public class MiniSQLShell {
             MetadataManager metadataManager = new MetadataManager(zkClient, new KryoSerializer());
             metadataManager.init();
 
+            ZkMetadataService zkMetadataService = new ZkMetadataService(zkClient);
+            zkMetadataService.init();
+            DistributionManager distributionManager = new DistributionManagerImpl(zkMetadataService);
+            LoadBalancer loadBalancer = new LoadBalancerImpl(zkMetadataService, distributionManager);
+            ReplicaManager replicaManager = new com.zju.minisql.common.replica.ReplicaManagerImpl(
+                    zkMetadataService,
+                    new PrimaryHandler(new ReplicaSyncRpcTransport()),
+                    new ReplicaHandler(loadBalancer),
+                    new FailoverHandler(zkMetadataService)
+            );
+
             // 4. 装配分布式协调器 (全链路大管家)
             DistributedQueryCoordinator coordinator = new DistributedQueryCoordinator(
                     metadataManager,
@@ -75,7 +96,8 @@ public class MiniSQLShell {
                         return workers;
                     })),
                     new RpcFragmentTaskClient(),
-                    new ResultMerger()
+                    new ResultMerger(),
+                    replicaManager
             );
 
             System.out.println("✅ 集群连接成功！当前发现活跃 Worker 节点数: " + workerDiscovery.getActiveWorkers().size());

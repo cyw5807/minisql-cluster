@@ -3,10 +3,13 @@ package com.zju.minisql.client.coordinator;
 import com.zju.minisql.common.meta.ColumnMeta;
 import com.zju.minisql.common.meta.MetadataManager;
 import com.zju.minisql.common.meta.TableMeta;
+import com.zju.minisql.common.query.model.Row;
 import com.zju.minisql.common.query.model.PartialQueryResult;
 import com.zju.minisql.common.query.model.QueryAst;
 import com.zju.minisql.common.query.model.QueryResult;
 import com.zju.minisql.common.query.model.TaskFragment;
+import com.zju.minisql.common.replica.ReplicaManager;
+import com.zju.minisql.common.replica.ReplicaResult;
 import com.zju.minisql.client.network.FragmentTaskClient;
 import com.zju.minisql.client.merger.ResultMerger;
 import com.zju.minisql.client.parser.SqlParser;
@@ -30,6 +33,7 @@ public class DistributedQueryCoordinator {
     private final DistributedPlanGenerator distributedPlanGenerator;
     private final FragmentTaskClient fragmentTaskClient;
     private final ResultMerger resultMerger;
+    private final ReplicaManager replicaManager;
 
     public DistributedQueryCoordinator(MetadataManager metadataManager,
                                        SqlParser sqlParser,
@@ -37,12 +41,23 @@ public class DistributedQueryCoordinator {
                                        DistributedPlanGenerator distributedPlanGenerator,
                                        FragmentTaskClient fragmentTaskClient,
                                        ResultMerger resultMerger) {
+        this(metadataManager, sqlParser, logicalPlanner, distributedPlanGenerator, fragmentTaskClient, resultMerger, null);
+    }
+
+    public DistributedQueryCoordinator(MetadataManager metadataManager,
+                                       SqlParser sqlParser,
+                                       LogicalPlanner logicalPlanner,
+                                       DistributedPlanGenerator distributedPlanGenerator,
+                                       FragmentTaskClient fragmentTaskClient,
+                                       ResultMerger resultMerger,
+                                       ReplicaManager replicaManager) {
         this.metadataManager = metadataManager;
         this.sqlParser = sqlParser;
         this.logicalPlanner = logicalPlanner;
         this.distributedPlanGenerator = distributedPlanGenerator;
         this.fragmentTaskClient = fragmentTaskClient;
         this.resultMerger = resultMerger;
+        this.replicaManager = replicaManager;
     }
 
     /**
@@ -107,27 +122,29 @@ public class DistributedQueryCoordinator {
                 throw new IllegalArgumentException("❌ SQL 执行失败: INSERT 语句的分片键不能为空");
             }
 
-            // 2. ⭐ 核心修复：从元数据中心/ZK监听缓存中，全动态获取当前时刻真正存活的 Worker 列表
-            // （根据你们组员 A 在 MetadataManager 里的方法定义，通常为 getActiveWorkers() 或 getOnlineWorkers()）
-            java.util.List<String> activeWorkers = metadataManager.getActiveWorkers(); 
+            int partitionId = Math.floorMod(String.valueOf(idValue).hashCode(), 1024);
+            if (replicaManager != null) {
+                Row row = new Row();
+                for (int i = 0; i < realColumns.size(); i++) {
+                    row.put(realColumns.get(i), ast.getInsertValues().get(i));
+                }
+                ReplicaResult writeResult = replicaManager.write(partitionId, ast.getTableName(), row);
+                if (!writeResult.isSuccess()) {
+                    throw new RuntimeException("❌ SQL 执行失败: " + writeResult.getMessage());
+                }
+                System.out.println("==> [副本写入] partition=" + partitionId + ", " + writeResult.getMessage());
+                return null;
+            }
 
-            // 3. 容错保护：防止极端情况下集群所有 Worker 全部宕机引发除以 0 的崩溃
+            java.util.List<String> activeWorkers = metadataManager.getActiveWorkers();
             if (activeWorkers == null || activeWorkers.isEmpty()) {
                 throw new RuntimeException("❌ SQL 执行失败: 当前分布式计算集群中没有存活的 Worker 节点！");
             }
-
-            // 4. 动态一致性哈希：按 ID 字符串哈希的绝对值，对“当前存活节点数”进行取模
-            // 这样即使某台 Worker 下线导致 activeWorkers 数量缩水，路由算法也会自动按新拓扑重新寻址
             int targetIndex = Math.abs(String.valueOf(idValue).hashCode()) % activeWorkers.size();
             String targetWorker = activeWorkers.get(targetIndex);
-
-            // 5. 组装分布式子任务片段
-            TaskFragment fragment = new TaskFragment("insert-" + System.currentTimeMillis(), targetWorker, ast); //
-            
-            // 6. 唤醒纯异步/同步 Netty RPC 客户端，将数据精准打入选中的 Worker 节点
+            TaskFragment fragment = new TaskFragment("insert-" + System.currentTimeMillis(), targetWorker, ast);
             fragmentTaskClient.execute(targetWorker, fragment);
-            
-            System.out.println("==> [全动态路由] 成功将数据 [ID=" + idValue + "] 散列投递至当前存活分片: " + targetWorker);
+            System.out.println("==> [兼容路径] 成功将数据 [ID=" + idValue + "] 投递至节点: " + targetWorker);
             return null; // 拦截成功，控制流结束
         }
 

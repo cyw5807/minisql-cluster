@@ -20,6 +20,7 @@ import com.zju.minisql.common.replica.ReplicaManagerImpl;
 import com.zju.minisql.common.rpc.serialize.KryoSerializer;
 import com.zju.minisql.common.zk.WorkerDiscovery;
 import com.zju.minisql.client.network.RpcFragmentTaskClient;
+import com.zju.minisql.client.network.ReplicaSyncRpcTransport;
 
 import com.zju.minisql.client.coordinator.DistributedQueryCoordinator;
 import com.zju.minisql.client.merger.ResultMerger;
@@ -91,7 +92,7 @@ public class GroupBQueryDemo {
             LoadBalancer loadBalancer = new LoadBalancerImpl(zkMetadataService, distributionManager);
             ReplicaManager replicaManager = new ReplicaManagerImpl(
                     zkMetadataService,
-                    new PrimaryHandler((nodeInfo, partitionId, row) -> true),
+                    new PrimaryHandler(new ReplicaSyncRpcTransport()),
                     new ReplicaHandler(loadBalancer),
                     new FailoverHandler(zkMetadataService)
             );
@@ -104,7 +105,8 @@ public class GroupBQueryDemo {
                     new SimpleLogicalPlanner(new MetadataManagerTableMetadataProvider(metadataManager)),
                     new SimpleDistributedPlanGenerator(new HashQueryRouter(() -> sortedWorkers(workerDiscovery), distributionManager)),
                     new RpcFragmentTaskClient(),
-                    new ResultMerger()
+                    new ResultMerger(),
+                    replicaManager
             );
 
             System.out.println("========================================");
@@ -195,7 +197,7 @@ public class GroupBQueryDemo {
 
         int partitionId = Math.floorMod(probeKey.hashCode(), 1024);
         Row demoRow = Row.of("id", 1001, "name", "Alice");
-        System.out.println("[A-模块] 副本写入结果: " + replicaManager.write(partitionId, demoRow).getMessage());
+        System.out.println("[A-模块] 副本写入结果: " + replicaManager.write(partitionId, "student", demoRow).getMessage());
         System.out.println("[A-模块] 副本读取路由: " + replicaManager.read(partitionId, probeKey).getMessage());
     }
 }

@@ -9,5 +9,5 @@ import com.zju.minisql.common.query.model.Row;
 @FunctionalInterface
 public interface ReplicaSyncTransport {
 
-    boolean syncWrite(NodeInfo nodeInfo, int partitionId, Row row);
+    boolean syncWrite(NodeInfo nodeInfo, int partitionId, String tableName, Row row);
 }

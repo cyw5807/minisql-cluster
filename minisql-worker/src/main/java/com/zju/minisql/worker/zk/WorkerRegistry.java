@@ -63,7 +63,7 @@ public class WorkerRegistry {
         }
 
         // 创建临时节点
-        String path = WORKERS_ROOT_PATH + "/" + workerAddress;
+
         if (zkClient.checkExists().forPath(path) != null) {
             zkClient.delete().forPath(path);
         }

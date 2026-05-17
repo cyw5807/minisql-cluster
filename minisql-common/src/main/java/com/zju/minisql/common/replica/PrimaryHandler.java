@@ -16,14 +16,49 @@ public class PrimaryHandler {
         this.transport = transport;
     }
 
-    public boolean handleWrite(int partitionId, Row row, List<NodeInfo> replicas) {
+    public WriteReport handleWrite(int partitionId, String tableName, Row row, NodeInfo primary, List<NodeInfo> replicas) {
+        boolean primaryWriteOk = transport.syncWrite(primary, partitionId, tableName, row);
+        if (!primaryWriteOk) {
+            return new WriteReport(false, false, 0, 1 + Math.max(1, replicas.size() / 2));
+        }
+
         int ack = 1;
         for (NodeInfo replica : replicas) {
-            if (transport.syncWrite(replica, partitionId, row)) {
+            if (transport.syncWrite(replica, partitionId, tableName, row)) {
                 ack++;
             }
         }
         int quorum = 1 + Math.max(1, replicas.size() / 2);
-        return ack >= quorum;
+        return new WriteReport(true, ack >= quorum, ack, quorum);
+    }
+
+    public static class WriteReport {
+        private final boolean primaryWriteOk;
+        private final boolean quorumMet;
+        private final int ack;
+        private final int quorum;
+
+        public WriteReport(boolean primaryWriteOk, boolean quorumMet, int ack, int quorum) {
+            this.primaryWriteOk = primaryWriteOk;
+            this.quorumMet = quorumMet;
+            this.ack = ack;
+            this.quorum = quorum;
+        }
+
+        public boolean isPrimaryWriteOk() {
+            return primaryWriteOk;
+        }
+
+        public boolean isQuorumMet() {
+            return quorumMet;
+        }
+
+        public int getAck() {
+            return ack;
+        }
+
+        public int getQuorum() {
+            return quorum;
+        }
     }
 }
