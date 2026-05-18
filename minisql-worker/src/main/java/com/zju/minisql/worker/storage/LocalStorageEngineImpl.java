@@ -12,11 +12,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 /**
- * 本地存储引擎实现（轻量版）。
+ * 本地存储引擎实现（基于 MVStore）。
  */
 public class LocalStorageEngineImpl implements LocalStorageEngine {
 
@@ -37,7 +36,7 @@ public class LocalStorageEngineImpl implements LocalStorageEngine {
 
     @Override
     public void delete(String tableName, String primaryKey) {
-        for (Map.Entry<Integer, ConcurrentHashMap<String, byte[]>> partition : partitionManager.stores().entrySet()) {
+        for (Map.Entry<Integer, Map<String, byte[]>> partition : partitionManager.stores().entrySet()) {
             partition.getValue().remove(scopedKey(tableName, primaryKey));
             partitionManager.flush(partition.getKey());
         }
@@ -52,7 +51,7 @@ public class LocalStorageEngineImpl implements LocalStorageEngine {
     @Override
     public Row get(String tableName, String primaryKey) {
         String key = scopedKey(tableName, primaryKey);
-        for (Map.Entry<Integer, ConcurrentHashMap<String, byte[]>> partition : partitionManager.stores().entrySet()) {
+        for (Map.Entry<Integer, Map<String, byte[]>> partition : partitionManager.stores().entrySet()) {
             byte[] data = partition.getValue().get(key);
             if (data != null) {
                 return serializer.deserialize(data, Row.class);

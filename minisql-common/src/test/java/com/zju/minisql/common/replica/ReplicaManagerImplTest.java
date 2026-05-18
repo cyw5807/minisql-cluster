@@ -67,6 +67,52 @@ class ReplicaManagerImplTest {
         Assertions.assertNotEquals("127.0.0.1:9012", metadata.getPrimaryNode(partitionId).getNodeId());
     }
 
+    @Test
+    void shouldMeetQuorumWhenOneReplicaWriteFails() {
+        InMemoryMetadata metadata = new InMemoryMetadata();
+        int partitionId = 3;
+        NodeInfo p = NodeInfo.fromAddress("127.0.0.1:9012");
+        NodeInfo r1 = NodeInfo.fromAddress("127.0.0.1:9013");
+        NodeInfo r2 = NodeInfo.fromAddress("127.0.0.1:9014");
+        metadata.owner.put(partitionId, p);
+        metadata.replicas.put(partitionId, new ArrayList<>(List.of(r1, r2)));
+
+        ReplicaManager replicaManager = new ReplicaManagerImpl(
+                metadata,
+                new PrimaryHandler((nodeInfo, pid, tableName, row) -> !"127.0.0.1:9014".equals(nodeInfo.getNodeId())),
+                new ReplicaHandler(new SimpleLoadBalancer()),
+                new FailoverHandler(metadata)
+        );
+
+        ReplicaResult writeResult = replicaManager.write(partitionId, "student", Row.of("id", 3001, "name", "carol"));
+        Assertions.assertTrue(writeResult.isSuccess());
+    }
+
+    @Test
+    void shouldPromoteReplicaWithLargestSyncProgress() {
+        InMemoryMetadata metadata = new InMemoryMetadata();
+        int partitionId = 4;
+        NodeInfo p = NodeInfo.fromAddress("127.0.0.1:9012");
+        NodeInfo r1 = NodeInfo.fromAddress("127.0.0.1:9013");
+        NodeInfo r2 = NodeInfo.fromAddress("127.0.0.1:9014");
+        metadata.owner.put(partitionId, p);
+        metadata.replicas.put(partitionId, new ArrayList<>(List.of(r1, r2)));
+
+        FailoverHandler failoverHandler = new FailoverHandler(metadata);
+        failoverHandler.recordSync(r1.getNodeId(), 100L);
+        failoverHandler.recordSync(r2.getNodeId(), 200L);
+        ReplicaManager replicaManager = new ReplicaManagerImpl(
+                metadata,
+                new PrimaryHandler((nodeInfo, pid, tableName, row) -> true),
+                new ReplicaHandler(new SimpleLoadBalancer()),
+                failoverHandler
+        );
+
+        replicaManager.read(partitionId, "warmup-key");
+        replicaManager.onNodeFailure(p.getNodeId());
+        Assertions.assertEquals(r2, metadata.getPrimaryNode(partitionId));
+    }
+
     private static class SimpleLoadBalancer implements LoadBalancer {
         @Override
         public NodeInfo selectReadNode(int partitionId, List<NodeInfo> nodes) {
