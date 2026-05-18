@@ -3,6 +3,7 @@ package com.zju.minisql.client;
 import com.zju.minisql.common.query.model.QueryResult;
 import com.zju.minisql.common.rpc.serialize.KryoSerializer;
 import com.zju.minisql.common.cluster.meta.ZkMetadataService;
+import com.zju.minisql.common.cluster.NodeInfo;
 import com.zju.minisql.common.distribution.DistributionManager;
 import com.zju.minisql.common.distribution.DistributionManagerImpl;
 import com.zju.minisql.common.loadbalance.LoadBalancer;
@@ -30,12 +31,14 @@ import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Scanner;
+import java.util.stream.Collectors;
 
 /**
- * MiniSQL 2.0 分布式数据库交互式命令行终端 (CLI) - 纯净动态版
+ * MiniSQL 2.0 分布式数据库交互式命令行终端 (CLI) - 纯净动态版 (已支持高级多副本路由)
  */
 public class MiniSQLShell {
 
@@ -70,12 +73,31 @@ public class MiniSQLShell {
             // 稍微等待 1 秒，让 ZK 把 worker 列表推过来
             Thread.sleep(1000); 
 
-            // 3. 初始化元数据中心 (纯净启动，不做任何硬编码预装载)
+            // 3. 初始化元数据中心
             MetadataManager metadataManager = new MetadataManager(zkClient, new KryoSerializer());
             metadataManager.init();
 
             ZkMetadataService zkMetadataService = new ZkMetadataService(zkClient);
             zkMetadataService.init();
+
+            // =========================================================
+            // 在协调器接管前，强行刷入 1024 个虚拟槽位的多副本拓扑结构
+            // =========================================================
+            System.out.println("⏳ [多副本强刷] 正在向 ZooKeeper 初始化 1024 个虚拟槽位的一致性哈希环...");
+            List<String> currentWorkers = new ArrayList<>(workerDiscovery.getActiveWorkers());
+            if (currentWorkers.isEmpty()) {
+                // 兜底策略：如果启动过快 Worker 还没注册，先用默认的 3 个节点打底
+                currentWorkers = Arrays.asList("127.0.0.1:9012", "127.0.0.1:9013", "127.0.0.1:9014");
+                System.out.println("⚠️ 未检测到在线 Worker，使用默认节点兜底初始化槽位...");
+            } else {
+                currentWorkers.sort(Comparator.naturalOrder());
+            }
+            
+            // 调用我们刚移植过来的槽位初始化方法
+            initPartitionMetadata(zkMetadataService, currentWorkers);
+            System.out.println("✅ [多副本强刷] 1024 个虚拟槽位 (主备关系) 元数据初始化成功！");
+            // =========================================================
+
             DistributionManager distributionManager = new DistributionManagerImpl(zkMetadataService);
             LoadBalancer loadBalancer = new LoadBalancerImpl(zkMetadataService, distributionManager);
             ReplicaManager replicaManager = new com.zju.minisql.common.replica.ReplicaManagerImpl(
@@ -85,7 +107,7 @@ public class MiniSQLShell {
                     new FailoverHandler(zkMetadataService)
             );
 
-            // 4. 装配分布式协调器 (全链路大管家)
+            // 4. 装配分布式协调器 (全链路大管家，注入了 replicaManager 以开启副本写入分支)
             DistributedQueryCoordinator coordinator = new DistributedQueryCoordinator(
                     metadataManager,
                     new JSqlParserSqlParser(),
@@ -94,7 +116,7 @@ public class MiniSQLShell {
                         List<String> workers = new ArrayList<>(workerDiscovery.getActiveWorkers());
                         workers.sort(Comparator.naturalOrder());
                         return workers;
-                    })),
+                    }, distributionManager)),
                     new RpcFragmentTaskClient(),
                     new ResultMerger(),
                     replicaManager
@@ -112,7 +134,6 @@ public class MiniSQLShell {
             StringBuilder sqlBuffer = new StringBuilder();
 
             while (true) {
-                // 打印提示符：如果是新行打印 minisql>，如果是多行输入打印 ->
                 if (sqlBuffer.length() == 0) {
                     System.out.print("minisql> ");
                 } else {
@@ -121,13 +142,11 @@ public class MiniSQLShell {
 
                 String line = scanner.nextLine().trim();
 
-                // 处理退出指令
                 if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit") || line.equalsIgnoreCase("exit;") || line.equalsIgnoreCase("quit;")) {
                     System.out.println("Bye.");
                     break;
                 }
 
-                // 处理清空当前输入指令
                 if (line.equalsIgnoreCase("\\c")) {
                     sqlBuffer.setLength(0);
                     continue;
@@ -139,24 +158,18 @@ public class MiniSQLShell {
 
                 sqlBuffer.append(line).append(" ");
 
-                // 只有当用户输入了分号 (;) 时，才认为一条 SQL 输入结束，开始执行
                 if (line.endsWith(";")) {
-                    // 去掉最后的分号，因为很多 Parser 遇到分号会解析失败
                     String finalSql = sqlBuffer.toString().trim();
                     finalSql = finalSql.substring(0, finalSql.length() - 1).trim();
 
                     try {
                         long startTime = System.currentTimeMillis();
                         
-                        // ==========================================
-                        // 🌟 核心执行与打印逻辑
-                        // ==========================================
                         QueryResult result = coordinator.execute(finalSql);
                         
                         if (result != null) {
-                            // 调用现成的 toPrettyString 打印精美表格
                             System.out.print(result.toPrettyString());
-                            System.out.println(); // 强制加一个换行，让耗时统计另起一行
+                            System.out.println();
                         } else {
                             System.out.println("Query OK.");
                         }
@@ -166,9 +179,9 @@ public class MiniSQLShell {
 
                     } catch (Exception e) {
                         System.out.println("ERROR: SQL 执行失败 - " + e.getMessage() + "\n");
+                        // 如果有复杂错，可以把这行打开： e.printStackTrace();
                     }
 
-                    // 执行完毕后，清空 Buffer，准备迎接下一条 SQL
                     sqlBuffer.setLength(0);
                 }
             }
@@ -176,6 +189,26 @@ public class MiniSQLShell {
             
         } finally {
             zkClient.close();
+        }
+    }
+
+    /**
+     * 在 ZK 中写入 1024 个槽位，并将它们分配给当前在线的 Worker 节点，同时计算出主备关系。
+     */
+    private static void initPartitionMetadata(ZkMetadataService metadataService, List<String> workers) {
+        if (workers.isEmpty()) {
+            return;
+        }
+        List<NodeInfo> nodes = workers.stream().map(NodeInfo::fromAddress).collect(Collectors.toList());
+        for (int partitionId = 0; partitionId < 1024; partitionId++) {
+            // 选择主节点
+            NodeInfo primary = nodes.get(partitionId % nodes.size());
+            metadataService.updatePartitionOwner(partitionId, primary);
+            // 选择除主节点外的其他节点作为备用副本
+            List<NodeInfo> replicas = nodes.stream()
+                    .filter(node -> !node.getNodeId().equals(primary.getNodeId()))
+                    .collect(Collectors.toList());
+            metadataService.upsertReplicas(partitionId, replicas);
         }
     }
 }

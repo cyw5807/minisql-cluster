@@ -102,7 +102,7 @@ public class DistributedQueryCoordinator {
         // 🌟 阶段 1.5：拦截 INSERT 数据流，全动态哈希路由投递（彻底杜绝硬编码）
         // ==========================================
         if ("INSERT".equals(ast.getStatementType())) {
-            // 1. ⭐ 核心修复：干掉硬编码，去元数据中心动态拉取目标表的真实 Schema 结构！
+            // 1. 干掉硬编码，去元数据中心动态拉取目标表的真实 Schema 结构！
             TableMeta tableMeta = metadataManager.getTable(ast.getTableName());
             if (tableMeta == null) {
                 throw new RuntimeException("❌ SQL 执行失败: 表不存在 [" + ast.getTableName() + "]");
@@ -161,9 +161,24 @@ public class DistributedQueryCoordinator {
 
         // 4. 并发下发 P2P 任务至 Worker 集群
         List<PartialQueryResult> partialResults = new ArrayList<>();
-        for (TaskFragment fragment : distributedExecutionPlan.getFragments()) {
-            // 调用你写好的 RPC 客户端，阻塞/异步等待局部结果
-            partialResults.add(fragmentTaskClient.execute(fragment.getWorkerAddress(), fragment));
+        List<TaskFragment> fragments = distributedExecutionPlan.getFragments();
+
+        // 针对 1 主 2 从（全量副本）架构的随机单节点读（读写分离雏形）
+        // 如果 Planner 生成了多个任务（说明是广播查询），且开启了多副本：
+        if (fragments.size() > 1 && replicaManager != null) {
+            System.out.println("==> 🛡️ [多副本读优化] 侦测到广播查询，触发单节点全量读！");
+            
+            // 既然每个 Worker 都有 100% 的数据，我们直接挑选列表里的第一个节点（或者你可以做个随机数做负载均衡）
+            TaskFragment luckyFragment = fragments.get(0);
+            
+            System.out.println("==> 🛡️ [多副本读优化] 读路由已成功锁定只读取节点: " + luckyFragment.getWorkerAddress());
+            partialResults.add(fragmentTaskClient.execute(luckyFragment.getWorkerAddress(), luckyFragment));
+            
+        } else {
+            // 如果是带了明确 WHERE id=? 的精准点查（只有一个任务），或者未开启多副本，则保持原逻辑
+            for (TaskFragment fragment : fragments) {
+                partialResults.add(fragmentTaskClient.execute(fragment.getWorkerAddress(), fragment));
+            }
         }
 
         // 5. 在客户端内存中进行结果聚合 (Reduce)
