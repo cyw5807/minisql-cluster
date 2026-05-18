@@ -6,6 +6,7 @@ import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 /**
  * 集群存活节点发现机制
@@ -18,6 +19,8 @@ public class WorkerDiscovery {
     
     // 使用线程安全的集合来保存当前活着的 Worker 地址 (如 ["127.0.0.1:9001", "127.0.0.1:9002"])
     private final List<String> activeWorkers = new CopyOnWriteArrayList<>();
+    private final List<Consumer<String>> addListeners = new CopyOnWriteArrayList<>();
+    private final List<Consumer<String>> removeListeners = new CopyOnWriteArrayList<>();
 
     public WorkerDiscovery(CuratorFramework zkClient) {
         this.zkClient = zkClient;
@@ -38,11 +41,15 @@ public class WorkerDiscovery {
             String workerAddress = path.replace(WORKERS_ROOT_PATH + "/", "");
 
             if (event.getType() == PathChildrenCacheEvent.Type.CHILD_ADDED) {
-                activeWorkers.add(workerAddress);
-                System.out.println("[动态扩容] 新 Worker 上线: " + workerAddress + "，当前可用列表: " + activeWorkers);
+                if (!activeWorkers.contains(workerAddress)) {
+                    activeWorkers.add(workerAddress);
+                    System.out.println("[动态扩容] 新 Worker 上线: " + workerAddress + "，当前可用列表: " + activeWorkers);
+                    addListeners.forEach(listener -> listener.accept(workerAddress));
+                }
             } else if (event.getType() == PathChildrenCacheEvent.Type.CHILD_REMOVED) {
                 activeWorkers.remove(workerAddress);
                 System.out.println("[故障感知] Worker 下线: " + workerAddress + "，当前可用列表: " + activeWorkers);
+                removeListeners.forEach(listener -> listener.accept(workerAddress));
             }
         });
         
@@ -55,5 +62,13 @@ public class WorkerDiscovery {
      */
     public List<String> getActiveWorkers() {
         return activeWorkers;
+    }
+
+    public void onWorkerAdded(Consumer<String> listener) {
+        addListeners.add(listener);
+    }
+
+    public void onWorkerRemoved(Consumer<String> listener) {
+        removeListeners.add(listener);
     }
 }

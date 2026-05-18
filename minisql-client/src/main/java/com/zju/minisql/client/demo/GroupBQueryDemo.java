@@ -2,6 +2,7 @@ package com.zju.minisql.client.demo;
 
 import com.zju.minisql.common.cluster.NodeInfo;
 import com.zju.minisql.common.cluster.NodeLoad;
+import com.zju.minisql.common.cluster.ClusterEvent;
 import com.zju.minisql.common.cluster.meta.ZkMetadataService;
 import com.zju.minisql.common.distribution.DistributionManager;
 import com.zju.minisql.common.distribution.DistributionManagerImpl;
@@ -96,6 +97,14 @@ public class GroupBQueryDemo {
                     new ReplicaHandler(loadBalancer),
                     new FailoverHandler(zkMetadataService)
             );
+            workerDiscovery.onWorkerRemoved(worker -> {
+                replicaManager.onNodeFailure(worker);
+                distributionManager.onClusterChange(ClusterEvent.removed(NodeInfo.fromAddress(worker)));
+            });
+            workerDiscovery.onWorkerAdded(worker -> {
+                replicaManager.onNodeRecovery(worker);
+                distributionManager.onClusterChange(ClusterEvent.added(NodeInfo.fromAddress(worker)));
+            });
 
             printModuleWiring(distributionManager, loadBalancer, replicaManager, activeWorkers);
 

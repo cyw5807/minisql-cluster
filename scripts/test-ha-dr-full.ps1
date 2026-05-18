@@ -19,8 +19,8 @@ Write-Host "[HA/DR] 4/5 load balance"
 mvn -q -pl minisql-common -am -Dtest=LoadBalancerImplTest test
 if ($LASTEXITCODE -ne 0) { throw "load balance regression failed" }
 
-Write-Host "[HA/DR] 5/5 local storage"
-mvn -q -pl minisql-worker -am -Dtest=LocalStorageEngineImplTest "-Dsurefire.failIfNoSpecifiedTests=false" test
-if ($LASTEXITCODE -ne 0) { throw "local storage regression failed" }
+Write-Host "[HA/DR] 5/5 worker storage + reconnect recovery"
+mvn -q -pl minisql-worker -am "-Dtest=LocalStorageEngineImplTest,ReplicaDataSyncServiceImplTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+if ($LASTEXITCODE -ne 0) { throw "worker storage/replica regression failed" }
 
 Write-Host "[HA/DR] all checks passed (local mode, no docker)"

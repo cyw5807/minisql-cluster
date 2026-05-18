@@ -10,10 +10,10 @@ import com.zju.minisql.common.query.service.DistributedQueryTaskService;
  */
 public class DistributedQueryTaskServiceImpl implements DistributedQueryTaskService {
 
-    private final InMemoryTableRepository repository;
+    private final WorkerTableRepository repository;
     private final QueryFragmentExecutor queryFragmentExecutor = new QueryFragmentExecutor();
 
-    public DistributedQueryTaskServiceImpl(InMemoryTableRepository repository) {
+    public DistributedQueryTaskServiceImpl(WorkerTableRepository repository) {
         this.repository = repository;
     }
 

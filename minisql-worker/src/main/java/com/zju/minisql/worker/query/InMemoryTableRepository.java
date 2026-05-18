@@ -3,7 +3,6 @@ package com.zju.minisql.worker.query;
 import com.zju.minisql.common.query.model.Row;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 1. 践行控制流与数据流分离，作为纯粹的弹性数据桶，不硬编码任何拓扑人数（如3个桶），天然支持节点动态下线。
  * 2. 彻底移除预加载的 Mock 数据，转为完全由后续运行期 INSERT 语句动态写入。
  */
-public class InMemoryTableRepository {
+public class InMemoryTableRepository implements WorkerTableRepository {
 
     // 使用 ConcurrentHashMap 确保高并发 RPC 读写时的线程安全
     private final Map<String, List<Row>> tables = new ConcurrentHashMap<>();
@@ -29,6 +28,7 @@ public class InMemoryTableRepository {
     /**
      * 获取当前 Worker 节点本地存储的局部数据分片
      */
+    @Override
     public List<Row> getTableRows(String tableName) {
         return tables.getOrDefault(tableName.toLowerCase(), List.of());
     }
@@ -38,6 +38,7 @@ public class InMemoryTableRepository {
      * 用于支撑后续演示过程中，用户在 CLI 界面亲手敲入的 INSERT INTO 语句。
      * 无论集群是3个节点还是因为下线变成了2个节点，Client 路由发过来的数据都会被该方法稳稳接住。
      */
+    @Override
     public synchronized void insertRow(String tableName, Row row) {
         String key = tableName.toLowerCase();
         // 如果表不存在（比如刚执行完 CREATE TABLE），则初始化一个空列表并追加数据

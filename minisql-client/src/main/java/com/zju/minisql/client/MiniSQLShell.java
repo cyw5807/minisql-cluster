@@ -3,6 +3,7 @@ package com.zju.minisql.client;
 import com.zju.minisql.common.query.model.QueryResult;
 import com.zju.minisql.common.rpc.serialize.KryoSerializer;
 import com.zju.minisql.common.cluster.meta.ZkMetadataService;
+import com.zju.minisql.common.cluster.ClusterEvent;
 import com.zju.minisql.common.cluster.NodeInfo;
 import com.zju.minisql.common.distribution.DistributionManager;
 import com.zju.minisql.common.distribution.DistributionManagerImpl;
@@ -106,6 +107,15 @@ public class MiniSQLShell {
                     new ReplicaHandler(loadBalancer),
                     new FailoverHandler(zkMetadataService)
             );
+
+            workerDiscovery.onWorkerRemoved(worker -> {
+                replicaManager.onNodeFailure(worker);
+                distributionManager.onClusterChange(ClusterEvent.removed(NodeInfo.fromAddress(worker)));
+            });
+            workerDiscovery.onWorkerAdded(worker -> {
+                replicaManager.onNodeRecovery(worker);
+                distributionManager.onClusterChange(ClusterEvent.added(NodeInfo.fromAddress(worker)));
+            });
 
             // 4. 装配分布式协调器 (全链路大管家，注入了 replicaManager 以开启副本写入分支)
             DistributedQueryCoordinator coordinator = new DistributedQueryCoordinator(
