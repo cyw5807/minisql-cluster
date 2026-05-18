@@ -76,6 +76,13 @@ public class NettyRpcClient {
         try {
             channel = bootstrap.connect(inetSocketAddress).sync().channel();
             channelCache.put(key, channel);
+            Channel finalChannel = channel;
+            channel.closeFuture().addListener(future -> {
+                Channel cached = channelCache.get(key);
+                if (cached == finalChannel) {
+                    channelCache.remove(key);
+                }
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("连接 Worker 节点失败: " + inetSocketAddress, e);
@@ -104,8 +111,14 @@ public class NettyRpcClient {
         // 写入网络缓冲区并发包
         channel.writeAndFlush(rpcRequest).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
-                future.cause().printStackTrace();
+                String key = targetAddress.toString();
+                Channel cached = channelCache.get(key);
+                if (cached == channel) {
+                    channelCache.remove(key);
+                }
+                System.err.println("⚠️ RPC 发送失败，连接将重建: " + future.cause().getMessage());
                 // 发生异常时，清理挂起的 Future
+                unprocessedRequests.remove(rpcRequest.getRequestId());
                 resultFuture.completeExceptionally(future.cause());
             }
         });

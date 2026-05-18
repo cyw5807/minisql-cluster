@@ -5,6 +5,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.ReferenceCountUtil;
 
+import java.io.IOException;
+
 public class NettyClientHandler extends SimpleChannelInboundHandler<RpcResponse> {
 
     private final UnprocessedRequests unprocessedRequests;
@@ -26,8 +28,27 @@ public class NettyClientHandler extends SimpleChannelInboundHandler<RpcResponse>
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        System.err.println("RPC 客户端运行过程发生异常: " + cause.getMessage());
-        cause.printStackTrace();
+        if (isExpectedDisconnect(cause)) {
+            System.err.println("⚠️ RPC 连接已断开，等待自动重连: " + cause.getMessage());
+        } else {
+            System.err.println("RPC 客户端运行过程发生异常: " + cause.getMessage());
+            cause.printStackTrace();
+        }
         ctx.close();
+    }
+
+    private boolean isExpectedDisconnect(Throwable cause) {
+        if (!(cause instanceof IOException)) {
+            return false;
+        }
+        String message = cause.getMessage();
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("connection reset")
+                || lower.contains("forcibly closed")
+                || message.contains("中止了一个已建立的连接")
+                || message.contains("远程主机强迫关闭了一个现有的连接");
     }
 }
