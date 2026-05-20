@@ -54,8 +54,8 @@ public class MiniSQLShell {
         String zkAddress = System.getenv("ZK_ADDR") != null ? System.getenv("ZK_ADDR") : DEFAULT_ZK_ADDRESS;
 
         System.out.println("==================================================");
-        System.out.println("🚀 正在初始化 MiniSQL Smart Client...");
-        System.out.println("📡 目标 ZooKeeper 寻址: " + zkAddress);
+        System.out.println("正在初始化 MiniSQL Smart Client...");
+        System.out.println("目标 ZooKeeper 寻址: " + zkAddress);
 
         // 1. 初始化 ZK 客户端
         CuratorFramework zkClient = CuratorFrameworkFactory.builder()
@@ -84,19 +84,19 @@ public class MiniSQLShell {
             // =========================================================
             // 在协调器接管前，强行刷入 1024 个虚拟槽位的多副本拓扑结构
             // =========================================================
-            System.out.println("⏳ [多副本强刷] 正在向 ZooKeeper 初始化 1024 个虚拟槽位的一致性哈希环...");
+            System.out.println("正在向 ZooKeeper 初始化 1024 个虚拟槽位的一致性哈希环...");
             List<String> currentWorkers = new ArrayList<>(workerDiscovery.getActiveWorkers());
             if (currentWorkers.isEmpty()) {
                 // 兜底策略：如果启动过快 Worker 还没注册，先用默认的 3 个节点打底
                 currentWorkers = Arrays.asList("127.0.0.1:9012", "127.0.0.1:9013", "127.0.0.1:9014");
-                System.out.println("⚠️ 未检测到在线 Worker，使用默认节点兜底初始化槽位...");
+                System.out.println("未检测到在线 Worker，使用默认节点兜底初始化槽位...");
             } else {
                 currentWorkers.sort(Comparator.naturalOrder());
             }
             
             // 调用我们刚移植过来的槽位初始化方法
             initPartitionMetadata(zkMetadataService, currentWorkers);
-            System.out.println("✅ [多副本强刷] 1024 个虚拟槽位 (主备关系) 元数据初始化成功！");
+            System.out.println("1024 个虚拟槽位 (主备关系) 元数据初始化成功！");
             // =========================================================
 
             DistributionManager distributionManager = new DistributionManagerImpl(zkMetadataService);
@@ -132,7 +132,7 @@ public class MiniSQLShell {
                     replicaManager
             );
 
-            System.out.println("✅ 集群连接成功！当前发现活跃 Worker 节点数: " + workerDiscovery.getActiveWorkers().size());
+            System.out.println("集群连接成功！当前发现活跃 Worker 节点数: " + workerDiscovery.getActiveWorkers().size());
             System.out.println("==================================================");
             System.out.println("  欢迎使用 MiniSQL 2.0 分布式终端");
             System.out.println("  Type 'exit' or 'quit' to quit. Type '\\c' to clear current buffer.");

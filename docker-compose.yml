@@ -16,7 +16,7 @@ services:
   # 2. 控制平面 (高可用双活 Master)
   master-1:
     build: ./minisql-master
-    container_name: minisql-master-active
+    container_name: minisql-master-1
     depends_on:
       # 🌟 新增：强制等待 ZK "健康" 后才启动
       zookeeper:
@@ -26,7 +26,7 @@ services:
 
   master-2:
     build: ./minisql-master
-    container_name: minisql-master-standby
+    container_name: minisql-master-2
     depends_on:
       zookeeper:
         condition: service_healthy

@@ -149,7 +149,7 @@ public class DistributedQueryCoordinator {
         }
 
         // ==========================================
-        // 🌟 阶段二：数据流下发 (DML/DQL - 查询/插入)
+        // 🌟 阶段二：数据流下发 (DML/DQL - 查询/操作)
         // 结合元数据进行路由，将子任务 RPC 并发下发给各个 Worker
         // ==========================================
         
@@ -166,12 +166,11 @@ public class DistributedQueryCoordinator {
         // 针对 1 主 2 从（全量副本）架构的随机单节点读（读写分离雏形）
         // 如果 Planner 生成了多个任务（说明是广播查询），且开启了多副本：
         if (fragments.size() > 1 && replicaManager != null) {
-            System.out.println("==> 🛡️ [多副本读优化] 侦测到广播查询，触发单节点全量读！");
+            // ⭐ 核心读优化：使用 ThreadLocalRandom 生成随机索引，实现纯随机读负载均衡
+            int randomIndex = java.util.concurrent.ThreadLocalRandom.current().nextInt(fragments.size());
+            TaskFragment luckyFragment = fragments.get(randomIndex);
             
-            // 既然每个 Worker 都有 100% 的数据，我们直接挑选列表里的第一个节点（或者你可以做个随机数做负载均衡）
-            TaskFragment luckyFragment = fragments.get(0);
-            
-            System.out.println("==> 🛡️ [多副本读优化] 读路由已成功锁定只读取节点: " + luckyFragment.getWorkerAddress());
+            System.out.println("==> 负责节点为： " + luckyFragment.getWorkerAddress());
             partialResults.add(fragmentTaskClient.execute(luckyFragment.getWorkerAddress(), luckyFragment));
             
         } else {

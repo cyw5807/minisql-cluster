@@ -1,0 +1,75 @@
+docker ps
+
+CREATE TABLE student (id INT, name VARCHAR(20), dept VARCHAR(20), score INT);
+
+CREATE TABLE student (id INT, name VARCHAR(20), score INT);
+
+CREATE TABLE score (id INT, course VARCHAR(50));
+
+INSERT INTO student VALUES (1001, 'Bob', 'CS', 95);
+INSERT INTO student VALUES (1002, 'David', 'ME', 85);
+INSERT INTO student VALUES (1003, 'Alice', 'EE', 92);
+INSERT INTO score VALUES (1001, 'ComputerNetwork');
+INSERT INTO score VALUES (1002, 'MechanicalDesign');
+INSERT INTO score VALUES (1003, 'CircuitAnalysis');
+
+SELECT * FROM student;
+
+docker restart $(docker ps -a -q)
+
+SELECT * FROM student;
+
+SELECT name FROM student WHERE id = 1001;
+
+SELECT dept, COUNT(*) AS cnt, AVG(score) AS avg_score 
+FROM student 
+WHERE score >= 85 
+GROUP BY dept;
+
+SELECT student.name, score.course 
+FROM student 
+JOIN score ON student.id = score.id;
+
+--------------------------------------------------
+
+docker stop minisql-worker-9012
+
+INSERT INTO student VALUES (1004, 'Charlie', 'CS', 88);
+INSERT INTO student VALUES (1005, 'Eve', 'EE', 90);
+
+SELECT * FROM student;
+
+SELECT dept, COUNT(*) AS cnt, AVG(score) AS avg_score 
+FROM student 
+WHERE score >= 85 
+GROUP BY dept;
+
+--------------------------------------------------
+
+docker start minisql-worker-9012
+
+SELECT * FROM student;
+
+--------------------------------------------------
+
+docker logs minisql-master-1
+
+docker stop minisql-master-1
+
+docker logs -f minisql-master-2
+
+--------------------------------------------------
+
+INSERT INTO student VALUES (1006, 'Felix', 'CS', 88);
+INSERT INTO student VALUES (1007, 'Grace', 'CS', 90);
+
+SELECT * FROM student;
+
+SELECT dept, COUNT(*) AS cnt, AVG(score) AS avg_score 
+FROM student 
+WHERE score >= 85 
+GROUP BY dept;
+
+
+
+
