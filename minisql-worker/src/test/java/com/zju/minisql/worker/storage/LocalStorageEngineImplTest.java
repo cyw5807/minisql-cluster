@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -103,6 +104,27 @@ class LocalStorageEngineImplTest {
         Assertions.assertNull(engine.get("student", "k1"));
         Assertions.assertNull(engine.get("student", "k2"));
         Assertions.assertNotNull(engine.get("course", "c1"));
+    }
+
+    @Test
+    void shouldPersistCrudAndEntryLogsToLocalFiles() throws Exception {
+        LocalStorageEngine engine = new LocalStorageEngineImpl(tempDir);
+        Row row = row("k1", 0, 10);
+        engine.insert("student", row);
+        engine.get("student", "k1");
+        engine.applyReplicationLog(new ReplicationEntry(OpType.UPDATE, "student", 0, row("k1", 0, 99), "k1", 8L, 100L));
+
+        Path crudLog = tempDir.resolve("logs").resolve("operation-crud.log");
+        Path entryLog = tempDir.resolve("logs").resolve("replication-entry.log");
+        Assertions.assertTrue(Files.exists(crudLog));
+        Assertions.assertTrue(Files.exists(entryLog));
+
+        String crudText = Files.readString(crudLog);
+        String entryText = Files.readString(entryLog);
+        Assertions.assertTrue(crudText.contains("\"op\":\"INSERT\""));
+        Assertions.assertTrue(crudText.contains("\"op\":\"READ_POINT\""));
+        Assertions.assertTrue(entryText.contains("\"source\":\"LOCAL\""));
+        Assertions.assertTrue(entryText.contains("\"source\":\"REPLICA\""));
     }
 
     /**

@@ -8,6 +8,7 @@ import com.zju.minisql.worker.storage.model.ScanOptions;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -20,32 +21,35 @@ import java.util.function.Predicate;
 public class LocalStorageEngineImpl implements LocalStorageEngine {
 
     private final PartitionManager partitionManager;
+    private final PersistentOperationLogger operationLogger;
     private final KryoSerializer serializer = new KryoSerializer();
 
     public LocalStorageEngineImpl(Path dataDir) {
         this.partitionManager = new PartitionManager(dataDir);
+        this.operationLogger = new PersistentOperationLogger(dataDir);
     }
 
     @Override
     public void insert(String tableName, Row row) {
-        String scopedKey = scopedKey(tableName, row.getPrimaryKey());
-        Map<String, byte[]> store = partitionManager.getStore(row.getPartitionId());
-        store.put(scopedKey, serializer.serialize(row));
-        partitionManager.flush(row.getPartitionId());
+        insertInternal(tableName, row);
+        operationLogger.logCrud("INSERT", tableName, row.getPrimaryKey(), row.getPartitionId(), "local write");
+        operationLogger.logEntry("LOCAL", buildLocalEntry(OpType.INSERT, tableName, row.getPartitionId(), row, row.getPrimaryKey()));
     }
 
     @Override
     public void delete(String tableName, String primaryKey) {
-        for (Map.Entry<Integer, Map<String, byte[]>> partition : partitionManager.stores().entrySet()) {
-            partition.getValue().remove(scopedKey(tableName, primaryKey));
-            partitionManager.flush(partition.getKey());
-        }
+        int deletedCount = deleteInternal(tableName, primaryKey);
+        operationLogger.logCrud("DELETE", tableName, primaryKey, null, "deletedRows=" + deletedCount);
+        Row emptyRow = new Row(primaryKey, tableName, -1, new HashMap<>());
+        operationLogger.logEntry("LOCAL", buildLocalEntry(OpType.DELETE, tableName, -1, emptyRow, primaryKey));
     }
 
     @Override
     public void update(String tableName, String primaryKey, Row newRow) {
-        delete(tableName, primaryKey);
-        insert(tableName, newRow);
+        deleteInternal(tableName, primaryKey);
+        insertInternal(tableName, newRow);
+        operationLogger.logCrud("UPDATE", tableName, primaryKey, newRow.getPartitionId(), "local update");
+        operationLogger.logEntry("LOCAL", buildLocalEntry(OpType.UPDATE, tableName, newRow.getPartitionId(), newRow, primaryKey));
     }
 
     @Override
@@ -54,9 +58,12 @@ public class LocalStorageEngineImpl implements LocalStorageEngine {
         for (Map.Entry<Integer, Map<String, byte[]>> partition : partitionManager.stores().entrySet()) {
             byte[] data = partition.getValue().get(key);
             if (data != null) {
-                return serializer.deserialize(data, Row.class);
+                Row row = serializer.deserialize(data, Row.class);
+                operationLogger.logCrud("READ_POINT", tableName, primaryKey, row.getPartitionId(), "hit");
+                return row;
             }
         }
+        operationLogger.logCrud("READ_POINT", tableName, primaryKey, null, "miss");
         return null;
     }
 
@@ -88,12 +95,15 @@ public class LocalStorageEngineImpl implements LocalStorageEngine {
 
         int from = Math.min(opts.getOffset(), rows.size());
         int to = opts.getLimit() < 0 ? rows.size() : Math.min(from + opts.getLimit(), rows.size());
-        return rows.subList(from, to).iterator();
+        List<Row> page = rows.subList(from, to);
+        operationLogger.logCrud("READ_SCAN", tableName, "", null, "matched=" + rows.size() + ", returned=" + page.size());
+        return page.iterator();
     }
 
     @Override
     public void deleteTable(String tableName) {
         String prefix = tableName + "::";
+        int removed = 0;
         for (Map.Entry<Integer, Map<String, byte[]>> partition : partitionManager.stores().entrySet()) {
             Map<String, byte[]> store = partition.getValue();
             List<String> toRemove = new ArrayList<>();
@@ -105,24 +115,49 @@ public class LocalStorageEngineImpl implements LocalStorageEngine {
             for (String key : toRemove) {
                 store.remove(key);
             }
+            removed += toRemove.size();
             boolean changed = !toRemove.isEmpty();
             if (changed) {
                 partitionManager.flush(partition.getKey());
             }
         }
+        operationLogger.logCrud("DROP_TABLE", tableName, "", null, "removedRows=" + removed);
     }
 
     @Override
     public void applyReplicationLog(ReplicationEntry entry) {
+        operationLogger.logEntry("REPLICA", entry);
         if (entry.getType() == OpType.DELETE) {
-            delete(entry.getRow().getTableName(), entry.getPrimaryKey());
+            int deleted = deleteInternal(entry.getRow().getTableName(), entry.getPrimaryKey());
+            operationLogger.logCrud(
+                    "DELETE",
+                    entry.getRow().getTableName(),
+                    entry.getPrimaryKey(),
+                    entry.getPartitionId(),
+                    "replica,deletedRows=" + deleted + ",logIndex=" + entry.getLogIndex()
+            );
             return;
         }
         if (entry.getType() == OpType.UPDATE) {
-            update(entry.getRow().getTableName(), entry.getPrimaryKey(), entry.getRow());
+            deleteInternal(entry.getRow().getTableName(), entry.getPrimaryKey());
+            insertInternal(entry.getRow().getTableName(), entry.getRow());
+            operationLogger.logCrud(
+                    "UPDATE",
+                    entry.getRow().getTableName(),
+                    entry.getPrimaryKey(),
+                    entry.getPartitionId(),
+                    "replica,logIndex=" + entry.getLogIndex()
+            );
             return;
         }
-        insert(entry.getRow().getTableName(), entry.getRow());
+        insertInternal(entry.getRow().getTableName(), entry.getRow());
+        operationLogger.logCrud(
+                "INSERT",
+                entry.getRow().getTableName(),
+                entry.getPrimaryKey(),
+                entry.getPartitionId(),
+                "replica,logIndex=" + entry.getLogIndex()
+        );
     }
 
     @Override
@@ -137,5 +172,40 @@ public class LocalStorageEngineImpl implements LocalStorageEngine {
 
     private String scopedKey(String tableName, String primaryKey) {
         return tableName + "::" + primaryKey;
+    }
+
+    private void insertInternal(String tableName, Row row) {
+        String scopedKey = scopedKey(tableName, row.getPrimaryKey());
+        Map<String, byte[]> store = partitionManager.getStore(row.getPartitionId());
+        store.put(scopedKey, serializer.serialize(row));
+        partitionManager.flush(row.getPartitionId());
+    }
+
+    private int deleteInternal(String tableName, String primaryKey) {
+        int deletedCount = 0;
+        for (Map.Entry<Integer, Map<String, byte[]>> partition : partitionManager.stores().entrySet()) {
+            byte[] removed = partition.getValue().remove(scopedKey(tableName, primaryKey));
+            if (removed != null) {
+                deletedCount++;
+                partitionManager.flush(partition.getKey());
+            }
+        }
+        return deletedCount;
+    }
+
+    private ReplicationEntry buildLocalEntry(OpType type,
+                                             String tableName,
+                                             int partitionId,
+                                             Row row,
+                                             String primaryKey) {
+        return new ReplicationEntry(
+                type,
+                tableName,
+                partitionId,
+                row,
+                primaryKey,
+                -1L,
+                System.currentTimeMillis()
+        );
     }
 }

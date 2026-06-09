@@ -28,11 +28,23 @@ public class ReplicationEntry {
         return partitionId;
     }
 
+    public String getTableName() {
+        return tableName;
+    }
+
     public Row getRow() {
         return row;
     }
 
     public String getPrimaryKey() {
         return primaryKey;
+    }
+
+    public long getLogIndex() {
+        return logIndex;
+    }
+
+    public long getTimestamp() {
+        return timestamp;
     }
 }
