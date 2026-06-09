@@ -45,6 +45,11 @@ public class InMemoryTableRepository implements WorkerTableRepository {
         tables.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
     }
 
+    @Override
+    public void deleteTable(String tableName) {
+        tables.remove(tableName.toLowerCase());
+    }
+
     /**
      * ⭐ 【框架装配方法】：返回一个纯净、空白的本地仓库
      * 遵循组长指示：不提前注入任何测试数据，还原本质，静待后续展示过程中的物理写入。

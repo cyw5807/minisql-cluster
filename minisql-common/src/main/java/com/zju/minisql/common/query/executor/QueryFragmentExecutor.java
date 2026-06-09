@@ -31,8 +31,22 @@ public class QueryFragmentExecutor {
         void insertRow(String tableName, Row row);
     }
 
+    @FunctionalInterface
+    public interface TableDeleter {
+        void deleteTable(String tableName);
+    }
+
     // 🌟 新增：包含写入能力的终极执行入口
     public PartialQueryResult execute(String workerAddress, QueryAst queryAst, TableRowProvider provider, TableRowInserter inserter) {
+        return execute(workerAddress, queryAst, provider, inserter, tableName -> {
+        });
+    }
+
+    public PartialQueryResult execute(String workerAddress,
+                                      QueryAst queryAst,
+                                      TableRowProvider provider,
+                                      TableRowInserter inserter,
+                                      TableDeleter deleter) {
         // 拦截 INSERT 动作，执行纯粹的单行落盘
         if ("INSERT".equals(queryAst.getStatementType())) {
             Row newRow = new Row();
@@ -49,6 +63,11 @@ public class QueryFragmentExecutor {
             inserter.insertRow(queryAst.getTableName(), newRow);
             
             // 插入操作不需要返回表格数据，返回一个空的集合作为 ACK 回执
+            return PartialQueryResult.forRows(workerAddress, Collections.emptyList());
+        }
+
+        if ("DROP_TABLE".equals(queryAst.getStatementType())) {
+            deleter.deleteTable(queryAst.getTableName());
             return PartialQueryResult.forRows(workerAddress, Collections.emptyList());
         }
 

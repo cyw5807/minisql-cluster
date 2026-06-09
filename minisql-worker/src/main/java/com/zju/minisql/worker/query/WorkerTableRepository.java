@@ -12,4 +12,6 @@ public interface WorkerTableRepository {
     List<Row> getTableRows(String tableName);
 
     void insertRow(String tableName, Row row);
+
+    void deleteTable(String tableName);
 }

@@ -92,9 +92,17 @@ public class DistributedQueryCoordinator {
         }
 
         if ("DROP_TABLE".equals(ast.getStatementType())) {
-            // 如果 MetadataManager 实现了删表逻辑，可以直接调用：
-            // metadataManager.dropTable(ast.getTableName());
-            System.out.println("提示: DROP TABLE 指令已被控制面拦截并处理: " + ast.getTableName());
+            metadataManager.dropTable(ast.getTableName());
+            List<String> activeWorkers = metadataManager.getActiveWorkers();
+            for (String workerAddress : activeWorkers) {
+                TaskFragment fragment = new TaskFragment(
+                        "drop-" + ast.getTableName() + "-" + System.nanoTime(),
+                        workerAddress,
+                        ast
+                );
+                fragmentTaskClient.execute(workerAddress, fragment);
+            }
+            System.out.println("DROP TABLE 已执行，元数据与 Worker 本地数据已清理: " + ast.getTableName());
             return null;
         }
 

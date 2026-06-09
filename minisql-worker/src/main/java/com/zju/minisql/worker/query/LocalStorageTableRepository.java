@@ -49,6 +49,11 @@ public class LocalStorageTableRepository implements WorkerTableRepository {
         storageEngine.insert(tableName, storageRow);
     }
 
+    @Override
+    public void deleteTable(String tableName) {
+        storageEngine.deleteTable(tableName);
+    }
+
     private String resolvePrimaryKey(Row row) {
         Object idValue = row.get("id");
         if (idValue != null) {

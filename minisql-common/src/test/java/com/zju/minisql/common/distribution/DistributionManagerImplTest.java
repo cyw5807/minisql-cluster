@@ -11,6 +11,12 @@ import java.util.List;
 
 class DistributionManagerImplTest {
 
+    /**
+     * 场景 T1：写请求路由 + 节点下线后缓存失效
+     * 集群初始有两个节点；路由一次写请求验证能正常返回节点。
+     * 随后将第一个节点标记为移除并触发 onClusterChange(NODE_REMOVED)，
+     * 验证后续路由仍能返回非空节点（路由缓存已失效，哈希环已移除该节点）。
+     */
     @Test
     void shouldRouteAndInvalidateAfterClusterChange() {
         InMemoryMetadata metadata = new InMemoryMetadata();
@@ -29,6 +35,13 @@ class DistributionManagerImplTest {
         Assertions.assertNotNull(nodeB);
     }
 
+    /**
+     * 场景 T2：路由缓存 TTL 内命中
+     * 元数据中配置好 Primary 节点，TTL 设为 30s。
+     * 对相同 key 连续路由两次，验证第二次命中本地缓存，
+     * ZooKeeper（InMemoryMetadata）的 getPrimaryNode 只被调用一次，
+     * 说明路由缓存（RoutingTable）生效，减少了元数据查询开销。
+     */
     @Test
     void shouldHitRoutingCacheWithinTtl() {
         InMemoryMetadata metadata = new InMemoryMetadata();
@@ -41,9 +54,16 @@ class DistributionManagerImplTest {
         NodeInfo second = manager.routeForRead("cache-key");
         Assertions.assertEquals(primary, first);
         Assertions.assertEquals(primary, second);
+        // 路由缓存命中，ZK 查询仅触发一次
         Assertions.assertEquals(1, metadata.primaryQueryCount);
     }
 
+    /**
+     * 场景 T3：getPartitionNodes 返回 Primary + Replica 完整列表
+     * 元数据中为同一分区配置了一个 Primary 和一个 Replica。
+     * 验证 getPartitionNodes 返回的列表长度为 2，
+     * 且顺序为 Primary 在前、Replica 在后（写操作首选 Primary 保证一致性）。
+     */
     @Test
     void shouldReturnPrimaryAndReplicasForPartitionNodes() {
         InMemoryMetadata metadata = new InMemoryMetadata();
@@ -59,6 +79,13 @@ class DistributionManagerImplTest {
         Assertions.assertEquals(replica, nodes.get(1));
     }
 
+    /**
+     * 场景 T4：Primary 缺失时回退到一致性哈希环
+     * 元数据中不配置 Primary（getPrimaryNode 返回 null），
+     * 集群有两个存活节点。
+     * 验证路由仍能通过一致性哈希环返回非空节点，
+     * 且返回的节点一定是存活节点之一（保证路由不会把请求发到未知节点）。
+     */
     @Test
     void shouldFallbackToHashRingWhenPrimaryIsAbsent() {
         InMemoryMetadata metadata = new InMemoryMetadata();

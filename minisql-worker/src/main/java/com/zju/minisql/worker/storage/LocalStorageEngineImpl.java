@@ -92,6 +92,27 @@ public class LocalStorageEngineImpl implements LocalStorageEngine {
     }
 
     @Override
+    public void deleteTable(String tableName) {
+        String prefix = tableName + "::";
+        for (Map.Entry<Integer, Map<String, byte[]>> partition : partitionManager.stores().entrySet()) {
+            Map<String, byte[]> store = partition.getValue();
+            List<String> toRemove = new ArrayList<>();
+            for (String key : store.keySet()) {
+                if (key.startsWith(prefix)) {
+                    toRemove.add(key);
+                }
+            }
+            for (String key : toRemove) {
+                store.remove(key);
+            }
+            boolean changed = !toRemove.isEmpty();
+            if (changed) {
+                partitionManager.flush(partition.getKey());
+            }
+        }
+    }
+
+    @Override
     public void applyReplicationLog(ReplicationEntry entry) {
         if (entry.getType() == OpType.DELETE) {
             delete(entry.getRow().getTableName(), entry.getPrimaryKey());

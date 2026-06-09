@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -70,6 +71,26 @@ public class QueryFragmentExecutorTest {
         assertEquals(3, result.getRows().size());
         assertEquals("Alice", result.getRows().get(0).get("student.name"));
         assertEquals("DistributedDB", result.getRows().get(0).get("score.course"));
+    }
+
+    @Test
+    public void testDropTableCommandDispatch() {
+        QueryAst queryAst = new QueryAst();
+        queryAst.setStatementType("DROP_TABLE");
+        queryAst.setTableName("student");
+        AtomicReference<String> droppedTable = new AtomicReference<>();
+
+        PartialQueryResult result = executor.execute(
+                "worker-1",
+                queryAst,
+                tableName -> List.of(),
+                (tableName, row) -> {
+                },
+                droppedTable::set
+        );
+
+        assertTrue(result.getRows().isEmpty());
+        assertEquals("student", droppedTable.get());
     }
 
     private List<Row> sampleStudentRows() {

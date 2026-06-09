@@ -18,6 +18,8 @@ public interface LocalStorageEngine {
 
     Iterator<Row> scan(String tableName, ScanOptions opts);
 
+    void deleteTable(String tableName);
+
     void applyReplicationLog(ReplicationEntry entry);
 
     byte[] exportPartition(int partitionId);
